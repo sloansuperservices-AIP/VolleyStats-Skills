@@ -284,7 +284,8 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
     const video = videoRef.current;
     const duration = video.duration;
-    const interval = 0.5; // Analyze every 0.5 seconds
+    // Increase sampling rate for better tracking (0.1s = 10 FPS)
+    const interval = 0.1;
     const totalSteps = Math.floor(duration / interval);
 
     const newTrajectory: TrajectoryPoint[] = [];
