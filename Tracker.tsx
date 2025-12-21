@@ -78,7 +78,12 @@ const doIntersect = (p1: Point, q1: Point, p2: Point, q2: Point) => {
 
   if (o1 !== o2 && o3 !== o4) return true;
 
-  // Special Cases (collinear) - simplified for now
+  // Special Cases (collinear)
+  if (o1 === 0 && onSegment(p1, q1, p2)) return true;
+  if (o2 === 0 && onSegment(p1, q1, q2)) return true;
+  if (o3 === 0 && onSegment(p2, q2, p1)) return true;
+  if (o4 === 0 && onSegment(p2, q2, q1)) return true;
+
   return false;
 };
 
