@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Play, Pause, Square, Circle, Minus, Plus, Trash2,
   Video, Target, Settings, Upload, ArrowLeft, MousePointer,
-  CheckCircle, AlertCircle, Loader2, PenTool, Type
+  CheckCircle, AlertCircle, Loader2, PenTool, Type, FileDown
 } from 'lucide-react';
 
 // --- Types ---
@@ -274,7 +274,12 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                     if (blob) {
                        const result = await fetchInference(blob);
                         if (result && result.images && result.images[0].results) {
-                          const bestResult = result.images[0].results[0];
+                          // Filter for volleyball class
+                          const volleyballs = result.images[0].results.filter((r: any) => r.name === 'volleyball' || r.class === 0);
+                          // Take the one with highest confidence
+                          volleyballs.sort((a: any, b: any) => b.confidence - a.confidence);
+
+                          const bestResult = volleyballs[0];
                           if (bestResult) {
                             const box = bestResult.box;
                             newTrajectory.push({
@@ -618,9 +623,28 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
               </button>
             )}
             {trajectory.length > 0 && (
-              <div className="mt-3 p-3 bg-green-900/20 border border-green-500/30 rounded text-sm text-green-400 flex items-center gap-2">
-                <CheckCircle className="w-4 h-4" />
-                Tracking Complete ({trajectory.length} frames)
+              <div className="mt-3 flex flex-col gap-2">
+                <div className="p-3 bg-green-900/20 border border-green-500/30 rounded text-sm text-green-400 flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4" />
+                  Tracking Complete ({trajectory.length} frames)
+                </div>
+                <button
+                   onClick={() => {
+                     const csvContent = "data:text/csv;charset=utf-8,"
+                       + "Frame,Time,X,Y,Confidence\n"
+                       + trajectory.map((t, idx) => `${idx},${t.time.toFixed(3)},${t.center.x.toFixed(1)},${t.center.y.toFixed(1)},${t.confidence.toFixed(3)}`).join("\n");
+                     const encodedUri = encodeURI(csvContent);
+                     const link = document.createElement("a");
+                     link.setAttribute("href", encodedUri);
+                     link.setAttribute("download", "volleyball_tracking.csv");
+                     document.body.appendChild(link);
+                     link.click();
+                     document.body.removeChild(link);
+                   }}
+                   className="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
+                >
+                  <FileDown className="w-4 h-4" /> Export CSV
+                </button>
               </div>
             )}
           </div>
