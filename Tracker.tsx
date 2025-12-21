@@ -336,14 +336,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                        const result = await fetchInference(blob);
                         if (result && result.images && result.images[0] && result.images[0].results) {
                           // Filter for volleyball class - check both name and class ID
-                          const volleyballs = result.images[0].results.filter((r: any) =>
-                            r.name === 'volleyball' ||
-                            r.name === 'ball' ||
-                            r.name === 'sports ball' ||
-                            r.class === 0
-                        if (result && result.images && result.images[0].results) {
-                          // Filter for ball-related classes (volleyball, sports ball, ball)
-                          // Custom models may use different class names/IDs
                           const ballDetections = result.images[0].results.filter((r: any) =>
                             r.name === 'volleyball' ||
                             r.name === 'sports ball' ||
@@ -354,8 +346,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                           // Take the one with highest confidence
                           ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
 
-                          const bestResult = volleyballs[0];
-                          if (bestResult && bestResult.box) {
                           const bestResult = ballDetections[0];
                           if (bestResult) {
                             const box = bestResult.box;
@@ -684,7 +674,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
           {videoUrl ? (
             <div
               ref={containerRef}
-              className="relative w-full flex-1 flex items-center justify-center bg-black rounded-lg overflow-hidden"
               className="relative w-full flex items-center justify-center bg-black rounded-lg overflow-hidden"
               style={{
                 // Auto-fit: use aspect ratio to determine height based on width

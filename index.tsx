@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 
 import { Tracker } from './Tracker';
+import { ServingTracker } from './ServingTracker';
 
 // --- Types ---
 
@@ -131,6 +132,8 @@ const App = () => {
           />
         ) : activeStation.id === 'tracker' ? (
           <Tracker onBack={() => setActiveStation(null)} />
+        ) : activeStation.id === 'serve' ? (
+          <ServingTracker onBack={() => setActiveStation(null)} />
         ) : (
           <StationView 
             station={activeStation} 
