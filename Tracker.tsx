@@ -109,6 +109,11 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   const [score, setScore] = useState(0);
   const [scoreLog, setScoreLog] = useState<{time: number, msg: string}[]>([]);
 
+  // Model status tracking
+  const [modelStatus, setModelStatus] = useState<'idle' | 'loading' | 'active' | 'error'>('idle');
+  const [lastInferenceTime, setLastInferenceTime] = useState<number | null>(null);
+  const [videoDimensions, setVideoDimensions] = useState<{width: number, height: number} | null>(null);
+
   // --- Refs ---
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -126,7 +131,16 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
       setTrajectory([]);
       setScore(0);
       setScoreLog([]);
+      setModelStatus('idle');
+      setLastInferenceTime(null);
+      setVideoDimensions(null);
     }
+  };
+
+  const handleVideoLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const video = e.currentTarget;
+    setDuration(video.duration);
+    setVideoDimensions({ width: video.videoWidth, height: video.videoHeight });
   };
 
   const togglePlay = () => {
@@ -221,6 +235,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     setIsAnalyzing(true);
     setAnalysisProgress(0);
     setTrajectory([]);
+    setModelStatus('loading');
 
     const video = videoRef.current;
     const duration = video.duration;
@@ -314,6 +329,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
   const fetchInference = async (imageBlob: Blob) => {
     try {
+      const startTime = Date.now();
       const apiKey = import.meta.env.VITE_ULTRALYTICS_API_KEY || '5ea02b4238fc9528408b8c36dcdb3834e11a9cbf58';
 
       const formData = new FormData();
@@ -323,10 +339,8 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
       formData.append('iou', '0.45');
       formData.append('file', imageBlob, 'frame.jpg');
 
-      // Use local proxy if available (to avoid CORS)
-      const apiUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-        ? '/api/ultralytics'
-        : 'https://predict.ultralytics.com';
+      // Always use the proxy endpoint (works in both dev and production via Netlify function)
+      const apiUrl = '/api/ultralytics';
 
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -340,11 +354,18 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         if (response.status === 0 || response.status === 403) {
            console.warn("API Request failed. This might be a CORS issue or Invalid Key.");
         }
+        setModelStatus('error');
         throw new Error(response.statusText);
       }
+
+      const inferenceTime = Date.now() - startTime;
+      setLastInferenceTime(inferenceTime);
+      setModelStatus('active');
+
       return await response.json();
     } catch (err) {
       console.error(err);
+      setModelStatus('error');
       return null;
     }
   };
@@ -519,19 +540,23 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
       <div className="flex flex-col lg:flex-row flex-1 gap-6 lg:overflow-hidden">
 
         {/* Left Column: Video & Canvas */}
-        <div className="w-full lg:flex-[2] flex flex-col bg-[#1a1d24] rounded-xl border border-gray-800 p-4 relative overflow-hidden min-h-[500px]">
+        <div className="w-full lg:flex-[2] flex flex-col bg-[#1a1d24] rounded-xl border border-gray-800 p-4 relative overflow-hidden">
           {videoUrl ? (
             <div
               ref={containerRef}
-              className="relative w-full h-full flex items-center justify-center bg-black rounded-lg overflow-hidden"
-              style={{ minHeight: '400px' }}
+              className="relative w-full flex items-center justify-center bg-black rounded-lg overflow-hidden"
+              style={{
+                // Auto-fit: use aspect ratio to determine height based on width
+                aspectRatio: videoDimensions ? `${videoDimensions.width} / ${videoDimensions.height}` : '16 / 9',
+                maxHeight: '70vh'
+              }}
             >
               <video
                 ref={videoRef}
                 src={videoUrl}
-                className="absolute inset-0 w-full h-full object-contain"
+                className="w-full h-full object-contain"
                 onTimeUpdate={handleTimeUpdate}
-                onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+                onLoadedMetadata={handleVideoLoadedMetadata}
               />
               <canvas
                 ref={canvasRef}
@@ -616,6 +641,79 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                 Tracking Complete ({trajectory.length} frames)
               </div>
             )}
+          </div>
+
+          {/* YOLO Model Status Card */}
+          <div className="bg-[#1a1d24] p-4 rounded-xl border border-gray-800">
+            <h3 className="font-bold text-gray-200 mb-3 flex items-center gap-2">
+              <Target className="w-4 h-4 text-green-400" /> Ultralytics YOLO Model
+            </h3>
+            <div className="space-y-3">
+              {/* Model Status Indicator */}
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-400">Status</span>
+                <div className="flex items-center gap-2">
+                  {modelStatus === 'idle' && (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-gray-500" />
+                      <span className="text-sm text-gray-400">Idle</span>
+                    </>
+                  )}
+                  {modelStatus === 'loading' && (
+                    <>
+                      <Loader2 className="w-4 h-4 text-yellow-500 animate-spin" />
+                      <span className="text-sm text-yellow-500">Loading...</span>
+                    </>
+                  )}
+                  {modelStatus === 'active' && (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                      <span className="text-sm text-green-400">Active</span>
+                    </>
+                  )}
+                  {modelStatus === 'error' && (
+                    <>
+                      <AlertCircle className="w-4 h-4 text-red-500" />
+                      <span className="text-sm text-red-400">Error</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Model Details */}
+              <div className="bg-black/30 rounded p-3 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">Model</span>
+                  <span className="text-cyan-400 font-mono">Volleyball YOLO</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">Image Size</span>
+                  <span className="text-gray-300 font-mono">640px</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">Confidence</span>
+                  <span className="text-gray-300 font-mono">0.25</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">IoU Threshold</span>
+                  <span className="text-gray-300 font-mono">0.45</span>
+                </div>
+                {lastInferenceTime && (
+                  <div className="flex items-center justify-between border-t border-gray-700 pt-2 mt-2">
+                    <span className="text-gray-500">Last Inference</span>
+                    <span className="text-green-400 font-mono">{lastInferenceTime}ms</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Video Dimensions Info */}
+              {videoDimensions && (
+                <div className="flex items-center justify-between text-xs bg-purple-900/20 border border-purple-500/30 rounded p-2">
+                  <span className="text-purple-400">Video Resolution</span>
+                  <span className="text-purple-300 font-mono">{videoDimensions.width} x {videoDimensions.height}</span>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Zones Card */}

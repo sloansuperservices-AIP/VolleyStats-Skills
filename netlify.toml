@@ -1,0 +1,12 @@
+[build]
+  publish = "dist"
+  command = "npm run build"
+
+[functions]
+  directory = "netlify/functions"
+
+# Redirect /api/ultralytics to the Netlify function
+[[redirects]]
+  from = "/api/ultralytics"
+  to = "/.netlify/functions/ultralytics"
+  status = 200
