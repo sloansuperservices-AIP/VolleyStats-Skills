@@ -142,13 +142,43 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   // --- Drawing Logic ---
   const getCanvasCoordinates = (e: React.MouseEvent) => {
     if (!canvasRef.current || !videoRef.current) return { x: 0, y: 0 };
-    const rect = canvasRef.current.getBoundingClientRect();
-    const scaleX = videoRef.current.videoWidth / rect.width;
-    const scaleY = videoRef.current.videoHeight / rect.height;
-    return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY
-    };
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+
+    // Get the bounding rectangle of the canvas (which matches the video element in DOM size)
+    const rect = canvas.getBoundingClientRect();
+
+    // Calculate the actual displayed size of the video within the element (handling object-contain)
+    const videoRatio = video.videoWidth / video.videoHeight;
+    const elementRatio = rect.width / rect.height;
+
+    let renderWidth = rect.width;
+    let renderHeight = rect.height;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (elementRatio > videoRatio) {
+      // Pillarboxed (black bars on sides)
+      renderWidth = rect.height * videoRatio;
+      offsetX = (rect.width - renderWidth) / 2;
+    } else {
+      // Letterboxed (black bars on top/bottom)
+      renderHeight = rect.width / videoRatio;
+      offsetY = (rect.height - renderHeight) / 2;
+    }
+
+    // Coordinates relative to the canvas element
+    const clientX = e.clientX - rect.left;
+    const clientY = e.clientY - rect.top;
+
+    // Check if click is within the video area
+    // (Optional: clamp or ignore if outside)
+
+    // Map to video source coordinates
+    const x = (clientX - offsetX) * (video.videoWidth / renderWidth);
+    const y = (clientY - offsetY) * (video.videoHeight / renderHeight);
+
+    return { x, y };
   };
 
   const handleCanvasClick = (e: React.MouseEvent) => {
@@ -230,9 +260,12 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
             if (ctx) {
                 ctx.drawImage(video, 0, 0);
-                // Create a promise for the blob and inference
+                // We MUST await the blob creation before moving to the next frame
+                // because the next iteration will overwrite the canvas.
+                const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
+
+                // Now we can fire off the network request asynchronously
                 const task = new Promise<void>(async (resolve) => {
-                    const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
                     if (blob) {
                        const result = await fetchInference(blob);
                         if (result && result.images && result.images[0].results) {
@@ -478,10 +511,10 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         <div className="w-20" /> {/* Spacer */}
       </div>
 
-      <div className="flex flex-1 gap-6 overflow-hidden">
+      <div className="flex flex-col lg:flex-row flex-1 gap-6 lg:overflow-hidden">
 
         {/* Left Column: Video & Canvas */}
-        <div className="flex-[2] flex flex-col bg-[#1a1d24] rounded-xl border border-gray-800 p-4 relative overflow-hidden">
+        <div className="w-full lg:flex-[2] flex flex-col bg-[#1a1d24] rounded-xl border border-gray-800 p-4 relative overflow-hidden min-h-[500px]">
           {videoUrl ? (
             <div
               ref={containerRef}
@@ -497,7 +530,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
               />
               <canvas
                 ref={canvasRef}
-                className="absolute inset-0 w-full h-full object-contain pointer-events-auto"
+                className="absolute inset-0 w-full h-full object-contain pointer-events-auto z-10"
                 onClick={handleCanvasClick}
                 style={{ cursor: activeTool ? 'crosshair' : 'default' }}
               />
@@ -547,7 +580,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         </div>
 
         {/* Right Column: Controls & Stats */}
-        <div className="flex-1 flex flex-col gap-4 overflow-y-auto">
+        <div className="w-full lg:flex-1 flex flex-col gap-4 lg:overflow-y-auto">
 
           {/* Analysis Card */}
           <div className="bg-[#1a1d24] p-4 rounded-xl border border-gray-800">
