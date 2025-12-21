@@ -273,14 +273,19 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                 const task = new Promise<void>(async (resolve) => {
                     if (blob) {
                        const result = await fetchInference(blob);
-                        if (result && result.images && result.images[0].results) {
-                          // Filter for volleyball class
-                          const volleyballs = result.images[0].results.filter((r: any) => r.name === 'volleyball' || r.class === 0);
+                        if (result && result.images && result.images[0] && result.images[0].results) {
+                          // Filter for volleyball class - check both name and class ID
+                          const volleyballs = result.images[0].results.filter((r: any) =>
+                            r.name === 'volleyball' ||
+                            r.name === 'ball' ||
+                            r.name === 'sports ball' ||
+                            r.class === 0
+                          );
                           // Take the one with highest confidence
                           volleyballs.sort((a: any, b: any) => b.confidence - a.confidence);
 
                           const bestResult = volleyballs[0];
-                          if (bestResult) {
+                          if (bestResult && bestResult.box) {
                             const box = bestResult.box;
                             newTrajectory.push({
                               time,
@@ -292,6 +297,9 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                               confidence: bestResult.confidence
                             });
                           }
+                        } else if (result) {
+                          // Log unexpected response format for debugging
+                          console.log("Frame analysis result (no volleyball detected):", time, result);
                         }
                     }
                     resolve();
@@ -319,8 +327,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
   const fetchInference = async (imageBlob: Blob) => {
     try {
-      const apiKey = import.meta.env.VITE_ULTRALYTICS_API_KEY || '5ea02b4238fc9528408b8c36dcdb3834e11a9cbf58';
-
       const formData = new FormData();
       formData.append('model', 'https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq');
       formData.append('imgsz', '640');
@@ -328,28 +334,22 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
       formData.append('iou', '0.45');
       formData.append('file', imageBlob, 'frame.jpg');
 
-      // Use local proxy if available (to avoid CORS)
-      const apiUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-        ? '/api/ultralytics'
-        : 'https://predict.ultralytics.com';
+      // Use the Netlify function proxy which handles API key server-side
+      const apiUrl = '/api/ultralytics';
 
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: {
-          'x-api-key': apiKey
-        },
         body: formData
       });
 
       if (!response.ok) {
-        if (response.status === 0 || response.status === 403) {
-           console.warn("API Request failed. This might be a CORS issue or Invalid Key.");
-        }
+        const errorText = await response.text();
+        console.warn("API Request failed:", response.status, errorText);
         throw new Error(response.statusText);
       }
       return await response.json();
     } catch (err) {
-      console.error(err);
+      console.error("Inference error:", err);
       return null;
     }
   };
@@ -427,13 +427,15 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
   // --- Rendering ---
 
-  // Draw Overlay
+  // Draw Overlay with proper scaling
   useEffect(() => {
     const canvas = canvasRef.current;
     const video = videoRef.current;
-    if (!canvas || !video) return;
+    const container = containerRef.current;
+    if (!canvas || !video || !container) return;
 
-    if (video.videoWidth) {
+    // Match canvas internal resolution to video source
+    if (video.videoWidth && video.videoHeight) {
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
     }
@@ -482,37 +484,78 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
     // Draw Ball & Trajectory
     if (trajectory.length > 0) {
-      // Draw path
+      // Draw path (trajectory trail)
       ctx.beginPath();
       ctx.strokeStyle = '#ffff00';
-      ctx.lineWidth = 3;
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
       trajectory.forEach((t, i) => {
         if (i === 0) ctx.moveTo(t.center.x, t.center.y);
         else ctx.lineTo(t.center.x, t.center.y);
       });
       ctx.stroke();
 
-      // Draw current ball position if near current time
+      // Draw trajectory points as small circles
+      trajectory.forEach((t, i) => {
+        ctx.beginPath();
+        ctx.fillStyle = i === trajectory.length - 1 ? '#ff00ff' : '#ffff0080';
+        ctx.arc(t.center.x, t.center.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Draw current ball position if near current time with prominent annotation
       const currentPoint = trajectory.find(p => Math.abs(p.time - currentTime) < 0.3);
       if (currentPoint) {
+        // Draw larger ball position indicator
         ctx.beginPath();
         ctx.fillStyle = '#ff00ff';
-        ctx.arc(currentPoint.center.x, currentPoint.center.y, 10, 0, Math.PI * 2);
+        ctx.arc(currentPoint.center.x, currentPoint.center.y, 15, 0, Math.PI * 2);
         ctx.fill();
 
-        // Bounding box
+        // Draw outer ring for visibility
+        ctx.beginPath();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 3;
+        ctx.arc(currentPoint.center.x, currentPoint.center.y, 18, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Draw prominent bounding box with double-line effect
+        const boxWidth = currentPoint.box.x2 - currentPoint.box.x1;
+        const boxHeight = currentPoint.box.y2 - currentPoint.box.y1;
+
+        // Outer box (white for contrast)
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(
+          currentPoint.box.x1 - 2,
+          currentPoint.box.y1 - 2,
+          boxWidth + 4,
+          boxHeight + 4
+        );
+
+        // Inner box (magenta)
         ctx.strokeStyle = '#ff00ff';
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 3;
         ctx.strokeRect(
           currentPoint.box.x1,
           currentPoint.box.y1,
-          currentPoint.box.x2 - currentPoint.box.x1,
-          currentPoint.box.y2 - currentPoint.box.y1
+          boxWidth,
+          boxHeight
         );
+
+        // Draw "BALL" label above bounding box
+        ctx.font = 'bold 24px Arial';
+        ctx.fillStyle = '#ff00ff';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3;
+        const labelText = `BALL ${(currentPoint.confidence * 100).toFixed(0)}%`;
+        ctx.strokeText(labelText, currentPoint.box.x1, currentPoint.box.y1 - 10);
+        ctx.fillText(labelText, currentPoint.box.x1, currentPoint.box.y1 - 10);
       }
     }
 
-  }, [zones, drawingPoints, trajectory, currentTime, videoRef.current?.videoWidth]);
+  }, [zones, drawingPoints, trajectory, currentTime, videoRef.current?.videoWidth, videoRef.current?.videoHeight]);
 
 
   return (
@@ -535,21 +578,23 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
           {videoUrl ? (
             <div
               ref={containerRef}
-              className="relative w-full h-full flex items-center justify-center bg-black rounded-lg overflow-hidden"
-              style={{ minHeight: '400px' }}
+              className="relative w-full flex-1 flex items-center justify-center bg-black rounded-lg overflow-hidden"
             >
               <video
                 ref={videoRef}
                 src={videoUrl}
-                className="absolute inset-0 w-full h-full object-contain"
+                className="w-full h-full object-contain"
                 onTimeUpdate={handleTimeUpdate}
                 onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
               />
               <canvas
                 ref={canvasRef}
-                className="absolute inset-0 w-full h-full object-contain pointer-events-auto z-10"
+                className="absolute top-0 left-0 w-full h-full pointer-events-auto"
                 onClick={handleCanvasClick}
-                style={{ cursor: activeTool ? 'crosshair' : 'default' }}
+                style={{
+                  cursor: activeTool ? 'crosshair' : 'default',
+                  objectFit: 'contain'
+                }}
               />
 
               {/* Overlay Controls */}
