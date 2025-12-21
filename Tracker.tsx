@@ -333,6 +333,13 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                 const task = new Promise<void>(async (resolve) => {
                     if (blob) {
                        const result = await fetchInference(blob);
+                        if (result && result.images && result.images[0] && result.images[0].results) {
+                          // Filter for volleyball class - check both name and class ID
+                          const volleyballs = result.images[0].results.filter((r: any) =>
+                            r.name === 'volleyball' ||
+                            r.name === 'ball' ||
+                            r.name === 'sports ball' ||
+                            r.class === 0
                         if (result && result.images && result.images[0].results) {
                           // Filter for ball-related classes (volleyball, sports ball, ball)
                           // Custom models may use different class names/IDs
@@ -346,6 +353,8 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                           // Take the one with highest confidence
                           ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
 
+                          const bestResult = volleyballs[0];
+                          if (bestResult && bestResult.box) {
                           const bestResult = ballDetections[0];
                           if (bestResult) {
                             const box = bestResult.box;
@@ -360,6 +369,9 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                               className: bestResult.name || 'ball'
                             });
                           }
+                        } else if (result) {
+                          // Log unexpected response format for debugging
+                          console.log("Frame analysis result (no volleyball detected):", time, result);
                         }
                     }
                     resolve();
@@ -402,9 +414,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: {
-          'x-api-key': apiKey
-        },
         body: formData
       });
 
@@ -422,6 +431,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
       return await response.json();
     } catch (err) {
+      console.error("Inference error:", err);
       console.error(err);
       setModelStatus('error');
       return null;
@@ -501,6 +511,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
   // --- Rendering ---
 
+  // Draw Overlay with proper scaling
   // Update canvas overlay position on resize
   useEffect(() => {
     const handleResize = () => {
@@ -515,9 +526,11 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   useEffect(() => {
     const canvas = canvasRef.current;
     const video = videoRef.current;
-    if (!canvas || !video) return;
+    const container = containerRef.current;
+    if (!canvas || !video || !container) return;
 
-    if (video.videoWidth) {
+    // Match canvas internal resolution to video source
+    if (video.videoWidth && video.videoHeight) {
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
     }
@@ -569,47 +582,71 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
       // Draw trajectory path
       ctx.beginPath();
       ctx.strokeStyle = '#ffff00';
-      ctx.lineWidth = 3;
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
       trajectory.forEach((t, i) => {
         if (i === 0) ctx.moveTo(t.center.x, t.center.y);
         else ctx.lineTo(t.center.x, t.center.y);
       });
       ctx.stroke();
 
-      // Draw current ball position with YOLO-style detection box
+      // Draw trajectory points as small circles
+      trajectory.forEach((t, i) => {
+        ctx.beginPath();
+        ctx.fillStyle = i === trajectory.length - 1 ? '#ff00ff' : '#ffff0080';
+        ctx.arc(t.center.x, t.center.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Draw current ball position if near current time with prominent annotation
       const currentPoint = trajectory.find(p => Math.abs(p.time - currentTime) < 0.3);
       if (currentPoint) {
-        const box = currentPoint.box;
-        const boxWidth = box.x2 - box.x1;
-        const boxHeight = box.y2 - box.y1;
-
-        // YOLO-style bounding box (blue like in reference image)
-        ctx.strokeStyle = '#3b82f6';
-        ctx.lineWidth = 3;
-        ctx.strokeRect(box.x1, box.y1, boxWidth, boxHeight);
-
-        // Draw center dot
+        // Draw larger ball position indicator
         ctx.beginPath();
-        ctx.fillStyle = '#3b82f6';
-        ctx.arc(currentPoint.center.x, currentPoint.center.y, 6, 0, Math.PI * 2);
+        ctx.fillStyle = '#ff00ff';
+        ctx.arc(currentPoint.center.x, currentPoint.center.y, 15, 0, Math.PI * 2);
         ctx.fill();
 
-        // Draw label background (YOLO-style)
-        const label = `${currentPoint.className || 'ball'} ${(currentPoint.confidence * 100).toFixed(1)}`;
-        ctx.font = 'bold 16px Arial';
-        const textMetrics = ctx.measureText(label);
-        const labelHeight = 22;
-        const labelWidth = textMetrics.width + 10;
-        const labelX = box.x1;
-        const labelY = box.y1 - labelHeight;
+        // Draw outer ring for visibility
+        ctx.beginPath();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 3;
+        ctx.arc(currentPoint.center.x, currentPoint.center.y, 18, 0, Math.PI * 2);
+        ctx.stroke();
 
-        // Label background
-        ctx.fillStyle = '#3b82f6';
-        ctx.fillRect(labelX, labelY > 0 ? labelY : box.y1, labelWidth, labelHeight);
+        // Draw prominent bounding box with double-line effect
+        const boxWidth = currentPoint.box.x2 - currentPoint.box.x1;
+        const boxHeight = currentPoint.box.y2 - currentPoint.box.y1;
 
-        // Label text
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(label, labelX + 5, (labelY > 0 ? labelY : box.y1) + 16);
+        // Outer box (white for contrast)
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(
+          currentPoint.box.x1 - 2,
+          currentPoint.box.y1 - 2,
+          boxWidth + 4,
+          boxHeight + 4
+        );
+
+        // Inner box (magenta)
+        ctx.strokeStyle = '#ff00ff';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(
+          currentPoint.box.x1,
+          currentPoint.box.y1,
+          boxWidth,
+          boxHeight
+        );
+
+        // Draw "BALL" label above bounding box
+        ctx.font = 'bold 24px Arial';
+        ctx.fillStyle = '#ff00ff';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3;
+        const labelText = `BALL ${(currentPoint.confidence * 100).toFixed(0)}%`;
+        ctx.strokeText(labelText, currentPoint.box.x1, currentPoint.box.y1 - 10);
+        ctx.fillText(labelText, currentPoint.box.x1, currentPoint.box.y1 - 10);
       }
 
       // Draw all detection points as small indicators
@@ -623,7 +660,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
       });
     }
 
-  }, [zones, drawingPoints, trajectory, currentTime, videoRef.current?.videoWidth]);
+  }, [zones, drawingPoints, trajectory, currentTime, videoRef.current?.videoWidth, videoRef.current?.videoHeight]);
 
 
   return (
@@ -646,6 +683,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
           {videoUrl ? (
             <div
               ref={containerRef}
+              className="relative w-full flex-1 flex items-center justify-center bg-black rounded-lg overflow-hidden"
               className="relative w-full flex items-center justify-center bg-black rounded-lg overflow-hidden"
               style={{
                 // Auto-fit: use aspect ratio to determine height based on width
