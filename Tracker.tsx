@@ -339,9 +339,16 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
            const isIn = checkInside(curr.center, zone);
            if (wasIn && !isIn) triggered = true;
         } else if (rule.condition === 'inside') {
-           // This triggers every frame? That's probably too much.
-           // Usually "landing" is what matters.
-           // For now, we'll skip continuous 'inside' scoring to avoid infinite points.
+           // Condition: Inside (Bounce/Land)
+           // Heuristic: Local Maxima of Y (lowest visual point)
+           const next = i + 1 < sorted.length ? sorted[i + 1] : null;
+
+           if (next && checkInside(curr.center, zone)) {
+             // Logic: curr.y >= prev.y (was going down or flat) AND curr.y > next.y (is going up)
+             // This detects the bottom of the bounce or the end of a floor contact
+             const isBounce = curr.center.y >= prev.center.y && curr.center.y > next.center.y;
+             if (isBounce) triggered = true;
+           }
         }
 
         if (triggered) {
@@ -636,6 +643,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                      <option value="enter">Enters</option>
                      <option value="cross">Crosses</option>
                      <option value="exit">Exits</option>
+                     <option value="inside">Lands Inside (Bounce)</option>
                   </select>
                   <select id="rule-action" className="bg-gray-800 text-sm rounded p-1 border border-gray-700">
                      <option value="add">Add Point (+)</option>
