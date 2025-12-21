@@ -31,6 +31,7 @@ interface TrajectoryPoint {
   box: { x1: number; y1: number; x2: number; y2: number };
   center: Point;
   confidence: number;
+  className?: string;
 }
 
 interface TrackerProps {
@@ -113,6 +114,50 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // State for canvas overlay positioning (to match video's object-contain rendering)
+  const [canvasStyle, setCanvasStyle] = useState<React.CSSProperties>({});
+
+  // Function to calculate canvas position/size to match the video's rendered area (object-contain)
+  const updateCanvasOverlay = () => {
+    const video = videoRef.current;
+    const container = containerRef.current;
+    if (!video || !container || !video.videoWidth || !video.videoHeight) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const containerWidth = containerRect.width;
+    const containerHeight = containerRect.height;
+
+    const videoRatio = video.videoWidth / video.videoHeight;
+    const containerRatio = containerWidth / containerHeight;
+
+    let renderWidth: number;
+    let renderHeight: number;
+    let offsetX: number;
+    let offsetY: number;
+
+    if (containerRatio > videoRatio) {
+      // Container is wider than video - pillarboxed (black bars on sides)
+      renderHeight = containerHeight;
+      renderWidth = containerHeight * videoRatio;
+      offsetX = (containerWidth - renderWidth) / 2;
+      offsetY = 0;
+    } else {
+      // Container is taller than video - letterboxed (black bars on top/bottom)
+      renderWidth = containerWidth;
+      renderHeight = containerWidth / videoRatio;
+      offsetX = 0;
+      offsetY = (containerHeight - renderHeight) / 2;
+    }
+
+    setCanvasStyle({
+      position: 'absolute',
+      left: `${offsetX}px`,
+      top: `${offsetY}px`,
+      width: `${renderWidth}px`,
+      height: `${renderHeight}px`,
+    });
+  };
 
   // --- Video Handling ---
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -274,12 +319,19 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                     if (blob) {
                        const result = await fetchInference(blob);
                         if (result && result.images && result.images[0].results) {
-                          // Filter for volleyball class
-                          const volleyballs = result.images[0].results.filter((r: any) => r.name === 'volleyball' || r.class === 0);
+                          // Filter for ball-related classes (volleyball, sports ball, ball)
+                          // Custom models may use different class names/IDs
+                          const ballDetections = result.images[0].results.filter((r: any) =>
+                            r.name === 'volleyball' ||
+                            r.name === 'sports ball' ||
+                            r.name === 'ball' ||
+                            r.class === 0 ||
+                            r.class === 32 // COCO sports ball class
+                          );
                           // Take the one with highest confidence
-                          volleyballs.sort((a: any, b: any) => b.confidence - a.confidence);
+                          ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
 
-                          const bestResult = volleyballs[0];
+                          const bestResult = ballDetections[0];
                           if (bestResult) {
                             const box = bestResult.box;
                             newTrajectory.push({
@@ -289,7 +341,8 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                                 x: (box.x1 + box.x2) / 2,
                                 y: (box.y1 + box.y2) / 2
                               },
-                              confidence: bestResult.confidence
+                              confidence: bestResult.confidence,
+                              className: bestResult.name || 'ball'
                             });
                           }
                         }
@@ -427,6 +480,16 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
   // --- Rendering ---
 
+  // Update canvas overlay position on resize
+  useEffect(() => {
+    const handleResize = () => {
+      updateCanvasOverlay();
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // Draw Overlay
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -480,9 +543,9 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
        // Draw partial shape... (simplified for now)
     }
 
-    // Draw Ball & Trajectory
+    // Draw Ball & Trajectory with YOLO-style bounding boxes
     if (trajectory.length > 0) {
-      // Draw path
+      // Draw trajectory path
       ctx.beginPath();
       ctx.strokeStyle = '#ffff00';
       ctx.lineWidth = 3;
@@ -492,70 +555,105 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
       });
       ctx.stroke();
 
-      // Draw current ball position if near current time
+      // Draw current ball position with YOLO-style detection box
       const currentPoint = trajectory.find(p => Math.abs(p.time - currentTime) < 0.3);
       if (currentPoint) {
+        const box = currentPoint.box;
+        const boxWidth = box.x2 - box.x1;
+        const boxHeight = box.y2 - box.y1;
+
+        // YOLO-style bounding box (blue like in reference image)
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(box.x1, box.y1, boxWidth, boxHeight);
+
+        // Draw center dot
         ctx.beginPath();
-        ctx.fillStyle = '#ff00ff';
-        ctx.arc(currentPoint.center.x, currentPoint.center.y, 10, 0, Math.PI * 2);
+        ctx.fillStyle = '#3b82f6';
+        ctx.arc(currentPoint.center.x, currentPoint.center.y, 6, 0, Math.PI * 2);
         ctx.fill();
 
-        // Bounding box
-        ctx.strokeStyle = '#ff00ff';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(
-          currentPoint.box.x1,
-          currentPoint.box.y1,
-          currentPoint.box.x2 - currentPoint.box.x1,
-          currentPoint.box.y2 - currentPoint.box.y1
-        );
+        // Draw label background (YOLO-style)
+        const label = `${currentPoint.className || 'ball'} ${(currentPoint.confidence * 100).toFixed(1)}`;
+        ctx.font = 'bold 16px Arial';
+        const textMetrics = ctx.measureText(label);
+        const labelHeight = 22;
+        const labelWidth = textMetrics.width + 10;
+        const labelX = box.x1;
+        const labelY = box.y1 - labelHeight;
+
+        // Label background
+        ctx.fillStyle = '#3b82f6';
+        ctx.fillRect(labelX, labelY > 0 ? labelY : box.y1, labelWidth, labelHeight);
+
+        // Label text
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(label, labelX + 5, (labelY > 0 ? labelY : box.y1) + 16);
       }
+
+      // Draw all detection points as small indicators
+      trajectory.forEach((t, idx) => {
+        if (Math.abs(t.time - currentTime) > 0.3) {
+          ctx.beginPath();
+          ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
+          ctx.arc(t.center.x, t.center.y, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
     }
 
   }, [zones, drawingPoints, trajectory, currentTime, videoRef.current?.videoWidth]);
 
 
   return (
-    <div className="flex flex-col h-full animate-fade-in bg-[#0f1115] text-white p-4">
+    <div className="flex flex-col h-full animate-fade-in bg-[#0f1115] text-white p-2 sm:p-4">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <button onClick={onBack} className="flex items-center text-gray-400 hover:text-white transition-colors">
-          <ArrowLeft className="w-5 h-5 mr-1" /> Back
+      <div className="flex items-center justify-between mb-2 sm:mb-4">
+        <button onClick={onBack} className="flex items-center text-gray-400 hover:text-white transition-colors text-sm">
+          <ArrowLeft className="w-4 h-4 mr-1" /> Back
         </button>
-        <h1 className="text-xl font-bold flex items-center gap-2">
-          <Target className="text-purple-400" /> Ball Tracking & Rules Engine
+        <h1 className="text-base sm:text-xl font-bold flex items-center gap-2">
+          <Target className="text-purple-400 w-4 h-4 sm:w-5 sm:h-5" /> Setting Tracker
         </h1>
-        <div className="w-20" /> {/* Spacer */}
+        <div className="w-12 sm:w-20" /> {/* Spacer */}
       </div>
 
-      <div className="flex flex-col lg:flex-row flex-1 gap-6 lg:overflow-hidden">
+      <div className="flex flex-col lg:flex-row flex-1 gap-3 sm:gap-6 lg:overflow-hidden min-h-0">
 
         {/* Left Column: Video & Canvas */}
-        <div className="w-full lg:flex-[2] flex flex-col bg-[#1a1d24] rounded-xl border border-gray-800 p-4 relative overflow-hidden min-h-[500px]">
+        <div className="w-full lg:flex-[2] flex flex-col bg-[#1a1d24] rounded-xl border border-gray-800 p-2 sm:p-4 relative overflow-hidden min-h-[300px] sm:min-h-[400px] lg:min-h-0">
           {videoUrl ? (
             <div
               ref={containerRef}
-              className="relative w-full h-full flex items-center justify-center bg-black rounded-lg overflow-hidden"
-              style={{ minHeight: '400px' }}
+              className="relative w-full flex-1 flex items-center justify-center bg-black rounded-lg overflow-hidden"
             >
               <video
                 ref={videoRef}
                 src={videoUrl}
                 className="absolute inset-0 w-full h-full object-contain"
                 onTimeUpdate={handleTimeUpdate}
-                onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+                onLoadedMetadata={(e) => {
+                  setDuration(e.currentTarget.duration);
+                  // Trigger canvas resize when video loads
+                  if (canvasRef.current && e.currentTarget.videoWidth) {
+                    canvasRef.current.width = e.currentTarget.videoWidth;
+                    canvasRef.current.height = e.currentTarget.videoHeight;
+                  }
+                  // Update canvas overlay position to match video's rendered area
+                  updateCanvasOverlay();
+                }}
               />
               <canvas
                 ref={canvasRef}
-                className="absolute inset-0 w-full h-full object-contain pointer-events-auto z-10"
+                className="pointer-events-auto z-10"
                 onClick={handleCanvasClick}
-                style={{ cursor: activeTool ? 'crosshair' : 'default' }}
+                style={{ cursor: activeTool ? 'crosshair' : 'default', ...canvasStyle }}
               />
 
               {/* Overlay Controls */}
-              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-black/60 backdrop-blur px-4 py-2 rounded-full border border-white/10 z-10">
+              <div className="absolute bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 sm:gap-4 bg-black/60 backdrop-blur px-2 sm:px-4 py-1 sm:py-2 rounded-full border border-white/10 z-10">
                  <button onClick={togglePlay} className="text-white hover:text-purple-400">
-                   {isPlaying ? <Pause className="fill-current" /> : <Play className="fill-current" />}
+                   {isPlaying ? <Pause className="fill-current w-4 h-4 sm:w-5 sm:h-5" /> : <Play className="fill-current w-4 h-4 sm:w-5 sm:h-5" />}
                  </button>
                  <input
                    type="range"
@@ -568,9 +666,9 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                      setCurrentTime(t);
                      if (videoRef.current) videoRef.current.currentTime = t;
                    }}
-                   className="w-64 accent-purple-500"
+                   className="w-24 sm:w-48 lg:w-64 accent-purple-500"
                  />
-                 <span className="text-xs font-mono w-16 text-right">
+                 <span className="text-xs font-mono w-20 sm:w-24 text-right">
                    {currentTime.toFixed(1)}s / {duration.toFixed(1)}s
                  </span>
               </div>
@@ -597,18 +695,18 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         </div>
 
         {/* Right Column: Controls & Stats */}
-        <div className="w-full lg:flex-1 flex flex-col gap-4 lg:overflow-y-auto">
+        <div className="w-full lg:flex-1 lg:max-w-sm flex flex-col gap-3 lg:overflow-y-auto">
 
           {/* Analysis Card */}
-          <div className="bg-[#1a1d24] p-4 rounded-xl border border-gray-800">
-            <h3 className="font-bold text-gray-200 mb-3 flex items-center gap-2">
+          <div className="bg-[#1a1d24] p-3 rounded-xl border border-gray-800">
+            <h3 className="font-bold text-gray-200 mb-2 flex items-center gap-2 text-sm">
               <Video className="w-4 h-4 text-purple-400" /> Analysis
             </h3>
             {isAnalyzing ? (
-              <div className="text-center py-4">
-                <Loader2 className="w-8 h-8 text-purple-500 animate-spin mx-auto mb-2" />
-                <p className="text-sm text-gray-400">Processing video frame by frame...</p>
-                <div className="w-full bg-gray-700 h-2 mt-3 rounded-full overflow-hidden">
+              <div className="text-center py-2">
+                <Loader2 className="w-6 h-6 text-purple-500 animate-spin mx-auto mb-2" />
+                <p className="text-xs text-gray-400">Processing video frame by frame...</p>
+                <div className="w-full bg-gray-700 h-1.5 mt-2 rounded-full overflow-hidden">
                   <div className="bg-purple-500 h-full transition-all" style={{ width: `${analysisProgress}%` }} />
                 </div>
                 <p className="text-xs text-right mt-1 text-gray-500">{analysisProgress}%</p>
@@ -617,15 +715,15 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
               <button
                 onClick={analyzeVideo}
                 disabled={!videoUrl}
-                className="w-full bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
+                className="w-full bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
               >
                 <Target className="w-4 h-4" /> Start Tracking Analysis
               </button>
             )}
             {trajectory.length > 0 && (
-              <div className="mt-3 flex flex-col gap-2">
-                <div className="p-3 bg-green-900/20 border border-green-500/30 rounded text-sm text-green-400 flex items-center gap-2">
-                  <CheckCircle className="w-4 h-4" />
+              <div className="mt-2 flex flex-col gap-2">
+                <div className="p-2 bg-green-900/20 border border-green-500/30 rounded text-xs text-green-400 flex items-center gap-2">
+                  <CheckCircle className="w-3 h-3" />
                   Tracking Complete ({trajectory.length} frames)
                 </div>
                 <button
@@ -641,53 +739,53 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                      link.click();
                      document.body.removeChild(link);
                    }}
-                   className="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
+                   className="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-1.5 rounded-lg transition-colors flex items-center justify-center gap-2 text-xs"
                 >
-                  <FileDown className="w-4 h-4" /> Export CSV
+                  <FileDown className="w-3 h-3" /> Export CSV
                 </button>
               </div>
             )}
           </div>
 
           {/* Zones Card */}
-          <div className="bg-[#1a1d24] p-4 rounded-xl border border-gray-800">
-            <h3 className="font-bold text-gray-200 mb-3 flex items-center gap-2">
-              <PenTool className="w-4 h-4 text-cyan-400" /> Zones
+          <div className="bg-[#1a1d24] p-3 rounded-xl border border-gray-800">
+            <h3 className="font-bold text-gray-200 mb-2 flex items-center gap-2 text-sm">
+              <PenTool className="w-4 h-4 text-cyan-400" /> Drawing Options
             </h3>
-            <div className="flex gap-2 mb-4">
+            <div className="flex gap-1.5 mb-3">
               <button
                 onClick={() => setActiveTool('line')}
-                className={`flex-1 py-3 rounded bg-gray-800 hover:bg-gray-700 transition-colors flex flex-col items-center gap-2 ${activeTool === 'line' ? 'ring-2 ring-cyan-500 bg-gray-700' : ''}`}
+                className={`flex-1 py-2 rounded bg-gray-800 hover:bg-gray-700 transition-colors flex flex-col items-center gap-1 ${activeTool === 'line' ? 'ring-2 ring-cyan-500 bg-gray-700' : ''}`}
               >
-                <Minus className="w-6 h-6 -rotate-45" /> <span className="text-sm font-medium">Line</span>
+                <Minus className="w-5 h-5 -rotate-45" /> <span className="text-xs font-medium">Line</span>
               </button>
               <button
                 onClick={() => setActiveTool('circle')}
-                className={`flex-1 py-3 rounded bg-gray-800 hover:bg-gray-700 transition-colors flex flex-col items-center gap-2 ${activeTool === 'circle' ? 'ring-2 ring-cyan-500 bg-gray-700' : ''}`}
+                className={`flex-1 py-2 rounded bg-gray-800 hover:bg-gray-700 transition-colors flex flex-col items-center gap-1 ${activeTool === 'circle' ? 'ring-2 ring-cyan-500 bg-gray-700' : ''}`}
               >
-                <Circle className="w-6 h-6" /> <span className="text-sm font-medium">Circle</span>
+                <Circle className="w-5 h-5" /> <span className="text-xs font-medium">Circle</span>
               </button>
               <button
                 onClick={() => setActiveTool('square')}
-                className={`flex-1 py-3 rounded bg-gray-800 hover:bg-gray-700 transition-colors flex flex-col items-center gap-2 ${activeTool === 'square' ? 'ring-2 ring-cyan-500 bg-gray-700' : ''}`}
+                className={`flex-1 py-2 rounded bg-gray-800 hover:bg-gray-700 transition-colors flex flex-col items-center gap-1 ${activeTool === 'square' ? 'ring-2 ring-cyan-500 bg-gray-700' : ''}`}
               >
-                <Square className="w-6 h-6" /> <span className="text-sm font-medium">Square</span>
+                <Square className="w-5 h-5" /> <span className="text-xs font-medium">Square</span>
               </button>
             </div>
 
             {zones.length === 0 && (
-              <p className="text-sm text-gray-500 text-center italic">Draw zones on the video to set up rules.</p>
+              <p className="text-xs text-gray-500 text-center italic">Draw zones on the video to set up rules.</p>
             )}
 
-            <div className="space-y-2 max-h-40 overflow-y-auto">
+            <div className="space-y-1.5 max-h-24 overflow-y-auto">
               {zones.map(zone => (
-                <div key={zone.id} className="flex items-center justify-between p-2 bg-gray-800 rounded">
+                <div key={zone.id} className="flex items-center justify-between p-1.5 bg-gray-800 rounded text-xs">
                   <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full" style={{ background: zone.color }} />
-                    <span className="text-sm font-medium">{zone.label}</span>
+                    <div className="w-2.5 h-2.5 rounded-full" style={{ background: zone.color }} />
+                    <span className="font-medium">{zone.label}</span>
                   </div>
                   <button onClick={() => setZones(zones.filter(z => z.id !== zone.id))} className="text-gray-500 hover:text-red-400">
-                    <Trash2 className="w-4 h-4" />
+                    <Trash2 className="w-3 h-3" />
                   </button>
                 </div>
               ))}
@@ -695,28 +793,28 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
           </div>
 
           {/* Rules Card */}
-          <div className="bg-[#1a1d24] p-4 rounded-xl border border-gray-800 flex-1">
-             <h3 className="font-bold text-gray-200 mb-3 flex items-center gap-2">
-              <Settings className="w-4 h-4 text-orange-400" /> Rules Engine
+          <div className="bg-[#1a1d24] p-3 rounded-xl border border-gray-800 flex-1 min-h-0 flex flex-col">
+             <h3 className="font-bold text-gray-200 mb-2 flex items-center gap-2 text-sm">
+              <Settings className="w-4 h-4 text-orange-400" /> Rule Sets
             </h3>
 
-            <div className="mb-4 space-y-2">
+            <div className="mb-3">
               {zones.length > 0 && (
-                <div className="flex gap-2 flex-wrap">
-                  <select id="rule-zone" className="bg-gray-800 text-sm rounded p-1 border border-gray-700">
+                <div className="grid grid-cols-2 gap-1.5 text-xs">
+                  <select id="rule-zone" className="bg-gray-800 rounded p-1.5 border border-gray-700 col-span-2">
                      {zones.map(z => <option key={z.id} value={z.id}>{z.label}</option>)}
                   </select>
-                  <select id="rule-cond" className="bg-gray-800 text-sm rounded p-1 border border-gray-700">
+                  <select id="rule-cond" className="bg-gray-800 rounded p-1.5 border border-gray-700">
                      <option value="enter">Enters</option>
                      <option value="cross">Crosses</option>
                      <option value="exit">Exits</option>
-                     <option value="inside">Lands Inside (Bounce)</option>
+                     <option value="inside">Lands Inside</option>
                   </select>
-                  <select id="rule-action" className="bg-gray-800 text-sm rounded p-1 border border-gray-700">
+                  <select id="rule-action" className="bg-gray-800 rounded p-1.5 border border-gray-700">
                      <option value="add">Add Point (+)</option>
-                     <option value="deduct">Deduct Point (-)</option>
+                     <option value="deduct">Deduct (-)</option>
                   </select>
-                  <input id="rule-points" type="number" defaultValue="1" className="w-12 bg-gray-800 text-sm rounded p-1 border border-gray-700" />
+                  <input id="rule-points" type="number" defaultValue="1" className="bg-gray-800 rounded p-1.5 border border-gray-700" placeholder="Points" />
                   <button
                     onClick={() => {
                       const zId = (document.getElementById('rule-zone') as HTMLSelectElement).value;
@@ -738,23 +836,23 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                         points: pts
                       }]);
                     }}
-                    className="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-sm font-bold"
+                    className="bg-purple-600 hover:bg-purple-500 px-3 py-1.5 rounded font-bold"
                   >
-                    Add
+                    Add Rule
                   </button>
                 </div>
               )}
             </div>
 
-            <div className="space-y-2 mb-4">
+            <div className="space-y-1.5 flex-1 overflow-y-auto max-h-24">
               {rules.map(rule => {
                 const zone = zones.find(z => z.id === rule.zoneId);
                 return (
-                  <div key={rule.id} className="text-xs bg-gray-800 p-2 rounded flex justify-between items-center border-l-2" style={{ borderColor: zone?.color }}>
+                  <div key={rule.id} className="text-xs bg-gray-800 p-1.5 rounded flex justify-between items-center border-l-2" style={{ borderColor: zone?.color }}>
                     <span>
-                      If Ball <b>{rule.condition}</b> {zone?.label} → <b className={rule.action === 'add' ? 'text-green-400' : 'text-red-400'}>{rule.action === 'add' ? '+' : '-'}{rule.points}</b>
+                      Ball <b>{rule.condition}</b> {zone?.label} → <b className={rule.action === 'add' ? 'text-green-400' : 'text-red-400'}>{rule.action === 'add' ? '+' : '-'}{rule.points}</b>
                     </span>
-                    <button onClick={() => setRules(rules.filter(r => r.id !== rule.id))} className="text-gray-500 hover:text-red-400">
+                    <button onClick={() => setRules(rules.filter(r => r.id !== rule.id))} className="text-gray-500 hover:text-red-400 ml-2">
                       <Trash2 className="w-3 h-3" />
                     </button>
                   </div>
@@ -762,14 +860,14 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
               })}
             </div>
 
-            <div className="mt-auto pt-4 border-t border-gray-800">
+            <div className="pt-3 border-t border-gray-800 mt-auto">
                <div className="flex justify-between items-end">
-                 <span className="text-gray-400 text-sm">Total Score</span>
-                 <span className={`text-4xl font-mono font-bold ${score >= 0 ? 'text-green-400' : 'text-red-400'}`}>{score}</span>
+                 <span className="text-gray-400 text-xs">Total Score</span>
+                 <span className={`text-3xl font-mono font-bold ${score >= 0 ? 'text-green-400' : 'text-red-400'}`}>{score}</span>
                </div>
 
                {scoreLog.length > 0 && (
-                 <div className="mt-3 h-32 overflow-y-auto bg-black/30 rounded p-2 space-y-1">
+                 <div className="mt-2 h-20 overflow-y-auto bg-black/30 rounded p-1.5 space-y-0.5">
                    {scoreLog.map((log, i) => (
                      <div key={i} className="text-xs text-gray-400 flex justify-between">
                        <span>{log.time.toFixed(1)}s</span>

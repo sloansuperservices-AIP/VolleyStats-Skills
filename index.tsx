@@ -50,35 +50,43 @@ interface Station {
 const STATIONS: Station[] = [
   {
     id: 'jump',
-    title: 'Station A: Vertical Explosiveness',
+    title: 'Station A: Vertical',
     description: 'Approach Jump & Takeoff Mechanics',
     icon: <TrendingUp className="w-6 h-6 text-cyan-400" />,
     promptTask: "Analyze this video of a volleyball approach jump. Estimate the vertical jump height (inches) based on the athlete's height. Analyze takeoff efficiency, arm swing mechanics, and landing.",
     requiredMetric: "Vertical Jump (inches)"
   },
   {
-    id: 'spike',
-    title: 'Station B: Attack Velocity',
-    description: 'Spike Mechanics & Arm Speed',
+    id: 'serve',
+    title: 'Station B: Serving',
+    description: 'Serve Mechanics & Arm Speed',
     icon: <Zap className="w-6 h-6 text-yellow-400" />,
-    promptTask: "Analyze this volleyball spike. Estimate the ball velocity/arm swing speed (qualitative or mph estimate). Analyze the bow-and-arrow form, contact point height, and wrist snap.",
-    requiredMetric: "Est. Spike Velocity (MPH)"
+    promptTask: "Analyze this volleyball serve. Estimate the ball velocity/arm swing speed (qualitative or mph estimate). Analyze the toss consistency, contact point height, and follow-through mechanics.",
+    requiredMetric: "Est. Serve Velocity (MPH)"
   },
   {
-    id: 'agility',
-    title: 'Station C: Lateral Agility',
-    description: 'Defensive Shuffle & Reaction',
+    id: 'passing',
+    title: 'Station C: Passing',
+    description: 'Pass Reception & Platform Control',
     icon: <Activity className="w-6 h-6 text-green-400" />,
-    promptTask: "Analyze this defensive movement/shuttle run. Analyze lateral acceleration, center of gravity consistency, and reaction time to directional change.",
-    requiredMetric: "Agility Rating (Speed/Form)"
+    promptTask: "Analyze this passing/reception technique. Analyze platform angle, footwork positioning, body posture, and ball control accuracy to target.",
+    requiredMetric: "Passing Accuracy Rating"
   },
   {
     id: 'tracker',
-    title: 'Station D: Accuracy Tracker',
-    description: 'Zone-based Ball Tracking',
+    title: 'Station D: Setting',
+    description: 'Set Tracking & Ball Placement',
     icon: <BarChart2 className="w-6 h-6 text-purple-400" />,
-    promptTask: "Track ball trajectory and accuracy.",
+    promptTask: "Track ball trajectory and setting accuracy.",
     requiredMetric: "Points"
+  },
+  {
+    id: 'agility',
+    title: 'Station F: Agility',
+    description: 'Defensive Shuffle & Reaction',
+    icon: <Activity className="w-6 h-6 text-orange-400" />,
+    promptTask: "Analyze this defensive movement/shuttle run. Analyze lateral acceleration, center of gravity consistency, and reaction time to directional change.",
+    requiredMetric: "Agility Rating (Speed/Form)"
   }
 ];
 
