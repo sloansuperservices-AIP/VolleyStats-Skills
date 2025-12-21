@@ -285,7 +285,12 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
       formData.append('iou', '0.45');
       formData.append('file', imageBlob, 'frame.jpg');
 
-      const response = await fetch('https://predict.ultralytics.com', {
+      // Use local proxy if available (to avoid CORS)
+      const apiUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        ? '/api/ultralytics'
+        : 'https://predict.ultralytics.com';
+
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'x-api-key': apiKey
