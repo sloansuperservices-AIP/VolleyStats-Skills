@@ -17,6 +17,8 @@ import {
   Loader2
 } from 'lucide-react';
 
+import { Tracker } from './Tracker';
+
 // --- Types ---
 
 interface AthleteProfile {
@@ -69,6 +71,14 @@ const STATIONS: Station[] = [
     icon: <Activity className="w-6 h-6 text-green-400" />,
     promptTask: "Analyze this defensive movement/shuttle run. Analyze lateral acceleration, center of gravity consistency, and reaction time to directional change.",
     requiredMetric: "Agility Rating (Speed/Form)"
+  },
+  {
+    id: 'tracker',
+    title: 'Station D: Accuracy Tracker',
+    description: 'Zone-based Ball Tracking',
+    icon: <BarChart2 className="w-6 h-6 text-purple-400" />,
+    promptTask: "Track ball trajectory and accuracy.",
+    requiredMetric: "Points"
   }
 ];
 
@@ -111,6 +121,8 @@ const App = () => {
             history={analysisHistory}
             onSelectStation={setActiveStation} 
           />
+        ) : activeStation.id === 'tracker' ? (
+          <Tracker onBack={() => setActiveStation(null)} />
         ) : (
           <StationView 
             station={activeStation} 
