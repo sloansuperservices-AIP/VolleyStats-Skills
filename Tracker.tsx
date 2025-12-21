@@ -223,7 +223,8 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     const interval = 0.1;
     const totalSteps = Math.floor(duration / interval);
 
-    const newTrajectory: TrajectoryPoint[] = [];
+    // Store raw detections for post-processing
+    const rawDetections: { time: number, items: any[] }[] = [];
 
     // Create hidden canvas for extraction
     const hiddenCanvas = document.createElement('canvas');
@@ -272,22 +273,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                         if (result && result.images && result.images[0].results) {
                           // Filter for volleyball class
                           const volleyballs = result.images[0].results.filter((r: any) => r.name === 'volleyball' || r.class === 0);
-                          // Take the one with highest confidence
-                          volleyballs.sort((a: any, b: any) => b.confidence - a.confidence);
-
-                          const bestResult = volleyballs[0];
-                          if (bestResult) {
-                            const box = bestResult.box;
-                            newTrajectory.push({
-                              time,
-                              box,
-                              center: {
-                                x: (box.x1 + box.x2) / 2,
-                                y: (box.y1 + box.y2) / 2
-                              },
-                              confidence: bestResult.confidence
-                            });
-                          }
+                          rawDetections.push({ time, items: volleyballs });
                         }
                     }
                     resolve();
@@ -307,10 +293,71 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     } finally {
       video.currentTime = originalTime;
       setIsAnalyzing(false);
-      setTrajectory(newTrajectory);
+
+      // Post-process tracking (Nearest Neighbor)
+      const trackedPath = processTracking(rawDetections);
+      setTrajectory(trackedPath);
+
       // Re-calculate score based on full trajectory
-      calculateFullScore(newTrajectory);
+      calculateFullScore(trackedPath);
     }
+  };
+
+  const processTracking = (rawFrames: { time: number, items: any[] }[]) => {
+    const finalPath: TrajectoryPoint[] = [];
+
+    // Sort by time (crucial because async returns might be out of order)
+    rawFrames.sort((a, b) => a.time - b.time);
+
+    let lastCenter: Point | null = null;
+
+    for (const frame of rawFrames) {
+      if (!frame.items || frame.items.length === 0) continue;
+
+      let selected = null;
+
+      if (!lastCenter) {
+         // First point: pick the one with max confidence
+         frame.items.sort((a: any, b: any) => b.confidence - a.confidence);
+         selected = frame.items[0];
+      } else {
+         // Subsequent points: Find closest to last known position
+         let minDist = Infinity;
+         let best = null;
+
+         for (const item of frame.items) {
+            const center = {
+               x: (item.box.x1 + item.box.x2) / 2,
+               y: (item.box.y1 + item.box.y2) / 2
+            };
+            const d = getDistance(lastCenter, center);
+            if (d < minDist) {
+               minDist = d;
+               best = item;
+            }
+         }
+
+         if (best) selected = best;
+      }
+
+      if (selected) {
+         const box = selected.box;
+         const center = {
+            x: (box.x1 + box.x2) / 2,
+            y: (box.y1 + box.y2) / 2
+         };
+
+         finalPath.push({
+           time: frame.time,
+           box: box,
+           center: center,
+           confidence: selected.confidence
+         });
+         lastCenter = center;
+      }
+    }
+
+    return finalPath;
   };
 
   const fetchInference = async (imageBlob: Blob) => {
