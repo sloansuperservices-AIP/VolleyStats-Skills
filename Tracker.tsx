@@ -291,10 +291,20 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     const newTrajectory: TrajectoryPoint[] = [];
 
     // Create hidden canvas for extraction
+    // Performance Optimization: Downscale frame to model's input size (640px)
+    // This reduces toBlob encoding time and upload bandwidth significantly.
+    const MAX_INFERENCE_DIMENSION = 640;
+    const scaleRatio = Math.min(
+      1,
+      MAX_INFERENCE_DIMENSION / Math.max(video.videoWidth, video.videoHeight)
+    );
+    const workWidth = Math.round(video.videoWidth * scaleRatio);
+    const workHeight = Math.round(video.videoHeight * scaleRatio);
+
     const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = video.videoWidth;
-    hiddenCanvas.height = video.videoHeight;
-    const ctx = hiddenCanvas.getContext('2d');
+    hiddenCanvas.width = workWidth;
+    hiddenCanvas.height = workHeight;
+    const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
 
     // Store current time to restore later
     const originalTime = video.currentTime;
@@ -325,7 +335,8 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
             });
 
             if (ctx) {
-                ctx.drawImage(video, 0, 0);
+                // Draw scaled down frame
+                ctx.drawImage(video, 0, 0, workWidth, workHeight);
                 // We MUST await the blob creation before moving to the next frame
                 // because the next iteration will overwrite the canvas.
                 const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
@@ -348,7 +359,15 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
                           const bestResult = ballDetections[0];
                           if (bestResult) {
-                            const box = bestResult.box;
+                            // Scale box back to original video dimensions
+                            const scaleFactor = 1 / scaleRatio;
+                            const box = {
+                              x1: bestResult.box.x1 * scaleFactor,
+                              y1: bestResult.box.y1 * scaleFactor,
+                              x2: bestResult.box.x2 * scaleFactor,
+                              y2: bestResult.box.y2 * scaleFactor
+                            };
+
                             newTrajectory.push({
                               time,
                               box,

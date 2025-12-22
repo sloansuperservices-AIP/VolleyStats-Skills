@@ -228,10 +228,19 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     const totalSteps = Math.floor(duration / interval);
     const newTrajectory: TrajectoryPoint[] = [];
 
+    // Performance Optimization: Downscale frame to model's input size (640px)
+    const MAX_INFERENCE_DIMENSION = 640;
+    const scaleRatio = Math.min(
+      1,
+      MAX_INFERENCE_DIMENSION / Math.max(video.videoWidth, video.videoHeight)
+    );
+    const workWidth = Math.round(video.videoWidth * scaleRatio);
+    const workHeight = Math.round(video.videoHeight * scaleRatio);
+
     const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = video.videoWidth;
-    hiddenCanvas.height = video.videoHeight;
-    const ctx = hiddenCanvas.getContext('2d');
+    hiddenCanvas.width = workWidth;
+    hiddenCanvas.height = workHeight;
+    const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
     const originalTime = video.currentTime;
     video.pause();
 
@@ -253,7 +262,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
             });
 
             if (ctx) {
-                ctx.drawImage(video, 0, 0);
+                ctx.drawImage(video, 0, 0, workWidth, workHeight);
                 const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
 
                 const task = new Promise<void>(async (resolve) => {
@@ -266,10 +275,19 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
                           ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
                           const bestResult = ballDetections[0];
                           if (bestResult) {
+                            // Scale box back to original video dimensions
+                            const scaleFactor = 1 / scaleRatio;
+                            const box = {
+                              x1: bestResult.box.x1 * scaleFactor,
+                              y1: bestResult.box.y1 * scaleFactor,
+                              x2: bestResult.box.x2 * scaleFactor,
+                              y2: bestResult.box.y2 * scaleFactor
+                            };
+
                             newTrajectory.push({
                               time,
-                              box: bestResult.box,
-                              center: { x: (bestResult.box.x1 + bestResult.box.x2) / 2, y: (bestResult.box.y1 + bestResult.box.y2) / 2 },
+                              box,
+                              center: { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 },
                               confidence: bestResult.confidence
                             });
                           }
