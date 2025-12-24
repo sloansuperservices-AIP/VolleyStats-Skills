@@ -299,6 +299,15 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     const hiddenCanvas = document.createElement('canvas');
     hiddenCanvas.width = Math.round(video.videoWidth * scale);
     hiddenCanvas.height = Math.round(video.videoHeight * scale);
+    // Create hidden canvas for extraction (scaled down for performance)
+    const MAX_INFERENCE_DIM = 640;
+    const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
+    const extractWidth = Math.round(video.videoWidth * scale);
+    const extractHeight = Math.round(video.videoHeight * scale);
+
+    const hiddenCanvas = document.createElement('canvas');
+    hiddenCanvas.width = extractWidth;
+    hiddenCanvas.height = extractHeight;
     const ctx = hiddenCanvas.getContext('2d');
 
     // Store current time to restore later
@@ -331,6 +340,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
             if (ctx) {
                 ctx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+                ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
                 // We MUST await the blob creation before moving to the next frame
                 // because the next iteration will overwrite the canvas.
                 const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
@@ -363,6 +373,12 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                                 y1: box.y1 * scaleY,
                                 x2: box.x2 * scaleX,
                                 y2: box.y2 * scaleY
+                            // Scale coordinates back to original video resolution
+                            const box = {
+                              x1: bestResult.box.x1 / scale,
+                              y1: bestResult.box.y1 / scale,
+                              x2: bestResult.box.x2 / scale,
+                              y2: bestResult.box.y2 / scale
                             };
 
                             newTrajectory.push({

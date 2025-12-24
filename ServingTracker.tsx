@@ -258,6 +258,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
 
             if (ctx) {
                 ctx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+                ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
                 const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
 
                 const task = new Promise<void>(async (resolve) => {
@@ -284,6 +285,18 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
                               time,
                               box: scaledBox,
                               center: { x: (scaledBox.x1 + scaledBox.x2) / 2, y: (scaledBox.y1 + scaledBox.y2) / 2 },
+                            // Scale coordinates back to original video resolution
+                            const box = {
+                              x1: bestResult.box.x1 / scale,
+                              y1: bestResult.box.y1 / scale,
+                              x2: bestResult.box.x2 / scale,
+                              y2: bestResult.box.y2 / scale
+                            };
+
+                            newTrajectory.push({
+                              time,
+                              box,
+                              center: { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 },
                               confidence: bestResult.confidence
                             });
                           }
