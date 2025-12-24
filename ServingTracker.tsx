@@ -381,6 +381,9 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     const extractWidth = Math.round(video.videoWidth * scale);
     const extractHeight = Math.round(video.videoHeight * scale);
 
+    const extractWidth = Math.round(video.videoWidth * scale);
+    const extractHeight = Math.round(video.videoHeight * scale);
+
     const hiddenCanvas = document.createElement('canvas');
     hiddenCanvas.width = extractWidth;
     hiddenCanvas.height = extractHeight;

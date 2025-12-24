@@ -250,6 +250,13 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     const video = e.currentTarget;
     setDuration(video.duration || 0);
     setVideoDimensions({ width: video.videoWidth, height: video.videoHeight });
+
+    // Trigger canvas resize when video loads
+    if (canvasRef.current && video.videoWidth) {
+      canvasRef.current.width = video.videoWidth;
+      canvasRef.current.height = video.videoHeight;
+    }
+    // Update canvas overlay position to match video's rendered area
     updateCanvasOverlay();
   };
 
@@ -450,6 +457,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     // The API expects 640px anyway.
     const MAX_INFERENCE_DIM = 640;
     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
+
     const extractWidth = Math.round(video.videoWidth * scale);
     const extractHeight = Math.round(video.videoHeight * scale);
 
