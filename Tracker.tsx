@@ -6,18 +6,28 @@ import {
   Camera, StopCircle
 } from 'lucide-react';
 
+import {
+    Point,
+    getDistance,
+    isPointInCircle,
+    isPointInRect,
+    doIntersect
+} from './utils/math';
+import {
+    MAX_INFERENCE_DIM,
+    calculateScalingRatio,
+    extractFrameFromVideo
+} from './utils/video';
+import {
+    drawZones,
+    drawTrajectory,
+    Zone,
+    ZoneType,
+    TrajectoryPoint
+} from './utils/drawing';
+import { fetchInference } from './utils/inference';
+
 // --- Types ---
-
-type Point = { x: number; y: number };
-type ZoneType = 'line' | 'circle' | 'square';
-
-interface Zone {
-  id: string;
-  type: ZoneType;
-  points: Point[]; // Line: [start, end], Square: [topLeft, bottomRight], Circle: [center, edgePoint]
-  label: string;
-  color: string;
-}
 
 interface Rule {
   id: string;
@@ -25,14 +35,6 @@ interface Rule {
   condition: 'cross' | 'enter' | 'exit' | 'inside';
   action: 'add' | 'deduct';
   points: number;
-}
-
-interface TrajectoryPoint {
-  time: number;
-  box: { x1: number; y1: number; x2: number; y2: number };
-  center: Point;
-  confidence: number;
-  className?: string;
 }
 
 interface TrackerProps {
@@ -44,51 +46,6 @@ interface TrackerProps {
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
 const COLORS = ['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#ec4899', '#8b5cf6'];
-
-// Geometry Helpers
-const getDistance = (p1: Point, p2: Point) => Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
-
-const isPointInCircle = (point: Point, center: Point, radius: Point) => {
-  const r = getDistance(center, radius);
-  return getDistance(point, center) <= r;
-};
-
-const isPointInRect = (point: Point, p1: Point, p2: Point) => {
-  const xMin = Math.min(p1.x, p2.x);
-  const xMax = Math.max(p1.x, p2.x);
-  const yMin = Math.min(p1.y, p2.y);
-  const yMax = Math.max(p1.y, p2.y);
-  return point.x >= xMin && point.x <= xMax && point.y >= yMin && point.y <= yMax;
-};
-
-// Line intersection
-const doIntersect = (p1: Point, q1: Point, p2: Point, q2: Point) => {
-  const onSegment = (p: Point, r: Point, q: Point) =>
-    q.x <= Math.max(p.x, r.x) && q.x >= Math.min(p.x, r.x) &&
-    q.y <= Math.max(p.y, r.y) && q.y >= Math.min(p.y, r.y);
-
-  const orientation = (p: Point, q: Point, r: Point) => {
-    const val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
-    if (val === 0) return 0;
-    return (val > 0) ? 1 : 2;
-  };
-
-  const o1 = orientation(p1, q1, p2);
-  const o2 = orientation(p1, q1, q2);
-  const o3 = orientation(p2, q2, p1);
-  const o4 = orientation(p2, q2, q1);
-
-  if (o1 !== o2 && o3 !== o4) return true;
-
-  // Special Cases (collinear)
-  if (o1 === 0 && onSegment(p1, q1, p2)) return true;
-  if (o2 === 0 && onSegment(p1, q1, q2)) return true;
-  if (o3 === 0 && onSegment(p2, q2, p1)) return true;
-  if (o4 === 0 && onSegment(p2, q2, q1)) return true;
-
-  return false;
-};
-
 
 export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   // --- State ---
@@ -124,6 +81,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   const streamRef = useRef<MediaStream | null>(null);
   const analysisLoopRef = useRef<number | null>(null);
   const isLiveAnalysisRunning = useRef(false);
+  const lastFrameTimeRef = useRef<number>(0);
 
   // State for canvas overlay positioning (to match video's object-contain rendering)
   const [canvasStyle, setCanvasStyle] = useState<React.CSSProperties>({});
@@ -205,6 +163,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
       // Start analysis loop
       isLiveAnalysisRunning.current = true;
+      lastFrameTimeRef.current = 0;
       analyzeLiveStream();
 
     } catch (err) {
@@ -352,87 +311,78 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
      const video = videoRef.current;
      if (video.readyState < 2) {
-        // Wait for video to be ready
         requestAnimationFrame(analyzeLiveStream);
         return;
      }
 
-     const startTime = Date.now();
+     // Throttling: 10 FPS = 100ms interval
+     const now = Date.now();
+     if (now - lastFrameTimeRef.current < 100) {
+        requestAnimationFrame(analyzeLiveStream);
+        return;
+     }
+     lastFrameTimeRef.current = now;
 
-     // Extract frame
-     const MAX_INFERENCE_DIM = 640;
-     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
-     const extractWidth = Math.round(video.videoWidth * scale);
-     const extractHeight = Math.round(video.videoHeight * scale);
+     const scaleRatio = calculateScalingRatio(video.videoWidth, video.videoHeight);
+     const extractWidth = Math.round(video.videoWidth * scaleRatio);
+     const extractHeight = Math.round(video.videoHeight * scaleRatio);
 
-     const hiddenCanvas = document.createElement('canvas');
-     hiddenCanvas.width = extractWidth;
-     hiddenCanvas.height = extractHeight;
-     const ctx = hiddenCanvas.getContext('2d');
+     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight);
 
-     if (ctx) {
-         ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
-         const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
+     if (blob && isLiveAnalysisRunning.current) {
+         const result = await fetchInference(blob);
 
-         if (blob && isLiveAnalysisRunning.current) {
-             const result = await fetchInference(blob);
+         if (result && result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
+             setLastInferenceTime(result.inferenceTime);
+             setModelStatus('active');
 
-             if (result && result.images && result.images[0] && result.images[0].results) {
-                 // Process results similar to analyzeVideo
-                  const ballDetections = result.images[0].results.filter((r: any) =>
-                    r.name === 'volleyball' ||
-                    r.name === 'sports ball' ||
-                    r.name === 'ball' ||
-                    r.class === 0 ||
-                    r.class === 32
-                  );
-                  ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
+             const ballDetections = result.data.images[0].results.filter((r: any) =>
+                r.name === 'volleyball' ||
+                r.name === 'sports ball' ||
+                r.name === 'ball' ||
+                r.class === 0 ||
+                r.class === 32
+             );
+             ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
 
-                  const bestResult = ballDetections[0];
-                  if (bestResult) {
-                    const box = bestResult.box;
-                    // Scale coordinates back to original video resolution
-                    const scaleX = video.videoWidth / extractWidth;
-                    const scaleY = video.videoHeight / extractHeight;
+             const bestResult = ballDetections[0];
+             if (bestResult) {
+                const box = bestResult.box;
+                // Scale coordinates back to original video resolution
+                const scaleX = video.videoWidth / extractWidth;
+                const scaleY = video.videoHeight / extractHeight;
 
-                    const scaledBox = {
-                        x1: box.x1 * scaleX,
-                        y1: box.y1 * scaleY,
-                        x2: box.x2 * scaleX,
-                        y2: box.y2 * scaleY
-                    };
+                const scaledBox = {
+                    x1: box.x1 * scaleX,
+                    y1: box.y1 * scaleY,
+                    x2: box.x2 * scaleX,
+                    y2: box.y2 * scaleY
+                };
 
-                    const time = Date.now() / 1000; // Unix timestamp or relative? Use relative to session start?
-                    // For live, maybe just use Date.now() or relative to start.
-                    // Let's use relative to start to keep numbers small.
-                    // But for now, just monotonic.
+                const time = Date.now() / 1000;
 
-                    const point: TrajectoryPoint = {
-                      time: time,
-                      box: scaledBox,
-                      center: {
+                const point: TrajectoryPoint = {
+                    time: time,
+                    box: scaledBox,
+                    center: {
                         x: (scaledBox.x1 + scaledBox.x2) / 2,
                         y: (scaledBox.y1 + scaledBox.y2) / 2
-                      },
-                      confidence: bestResult.confidence,
-                      className: bestResult.name || 'ball'
-                    };
+                    },
+                    confidence: bestResult.confidence,
+                    className: bestResult.name || 'ball'
+                };
 
-                    setTrajectory(prev => {
-                       const newT = [...prev, point];
-                       // Keep only last X seconds/points to avoid memory leak?
-                       // For now keep all.
-                       calculateFullScore(newT); // Re-calc score
-                       return newT;
-                    });
-                  }
+                setTrajectory(prev => {
+                    const newT = [...prev, point];
+                    calculateFullScore(newT); // Re-calc score
+                    return newT;
+                });
              }
+         } else if (result === null) {
+             setModelStatus('error');
          }
      }
 
-     // Throttle loop to avoid overwhelming API
-     // Aim for 5-10 FPS if possible, but API latency dictates.
-     // We just call next one after this one finishes.
      if (isLiveAnalysisRunning.current) {
         requestAnimationFrame(analyzeLiveStream);
      }
@@ -449,43 +399,26 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
     const video = videoRef.current;
     const duration = video.duration;
-    // Increase sampling rate for better tracking (0.1s = 10 FPS)
     const interval = 0.1;
     const totalSteps = Math.floor(duration / interval);
 
     const newTrajectory: TrajectoryPoint[] = [];
 
-    // Create hidden canvas for extraction
-    // Performance Optimization: Downscale frame to model's input size (640px)
-    // This reduces toBlob encoding time and upload bandwidth significantly.
-    const MAX_INFERENCE_DIMENSION = 640;
-    const scaleRatio = Math.min(
-      1,
-      MAX_INFERENCE_DIMENSION / Math.max(video.videoWidth, video.videoHeight)
-    );
-    const workWidth = Math.round(video.videoWidth * scaleRatio);
-    const workHeight = Math.round(video.videoHeight * scaleRatio);
+    const scaleRatio = calculateScalingRatio(video.videoWidth, video.videoHeight);
+    const extractWidth = Math.round(video.videoWidth * scaleRatio);
+    const extractHeight = Math.round(video.videoHeight * scaleRatio);
 
     const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = workWidth;
-    hiddenCanvas.height = workHeight;
+    hiddenCanvas.width = extractWidth;
+    hiddenCanvas.height = extractHeight;
     const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
-    // Optimization: Downscale to 640px max dimension to save bandwidth and encoding time
-    // The API expects 640px anyway.
-    const MAX_INFERENCE_DIM = 640;
-    const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
-    const extractWidth = Math.round(video.videoWidth * scale);
-    const extractHeight = Math.round(video.videoHeight * scale);
 
-    // Store current time to restore later
+    if (!ctx) return;
+
     const originalTime = video.currentTime;
     video.pause();
 
     try {
-      // Collect all frames first to minimize seek thrashing during network calls
-      // However, we can't store 1000 blobs in memory easily.
-      // Better: Process in batches of X.
-
       const BATCH_SIZE = 3;
 
       for (let i = 0; i <= totalSteps; i += BATCH_SIZE) {
@@ -505,65 +438,58 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
               video.addEventListener('seeked', onSeek);
             });
 
-            if (ctx) {
-                // Draw scaled down frame
-                ctx.drawImage(video, 0, 0, workWidth, workHeight);
-                ctx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-                ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
-                // We MUST await the blob creation before moving to the next frame
-                // because the next iteration will overwrite the canvas.
-                const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
+            // Reuse the single context and extract frame
+            const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, ctx);
 
-                // Now we can fire off the network request asynchronously
-                const task = new Promise<void>(async (resolve) => {
-                    if (blob) {
-                       const result = await fetchInference(blob);
-                        if (result && result.images && result.images[0] && result.images[0].results) {
-                          // Filter for volleyball class - check both name and class ID
-                          const ballDetections = result.images[0].results.filter((r: any) =>
-                            r.name === 'volleyball' ||
-                            r.name === 'sports ball' ||
-                            r.name === 'ball' ||
-                            r.class === 0 ||
-                            r.class === 32 // COCO sports ball class
-                          );
-                          // Take the one with highest confidence
-                          ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
+            // Now we can fire off the network request asynchronously
+            const task = new Promise<void>(async (resolve) => {
+                if (blob) {
+                   const result = await fetchInference(blob);
+                    if (result && result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
+                      setLastInferenceTime(result.inferenceTime);
+                      // Filter for volleyball class - check both name and class ID
+                      const ballDetections = result.data.images[0].results.filter((r: any) =>
+                        r.name === 'volleyball' ||
+                        r.name === 'sports ball' ||
+                        r.name === 'ball' ||
+                        r.class === 0 ||
+                        r.class === 32 // COCO sports ball class
+                      );
+                      // Take the one with highest confidence
+                      ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
 
-                          const bestResult = ballDetections[0];
-                          if (bestResult) {
-                            const box = bestResult.box;
-                            // Scale coordinates back to original video resolution
-                            const scaleX = video.videoWidth / extractWidth;
-                            const scaleY = video.videoHeight / extractHeight;
+                      const bestResult = ballDetections[0];
+                      if (bestResult) {
+                        const box = bestResult.box;
+                        // Scale coordinates back to original video resolution
+                        const scaleX = video.videoWidth / extractWidth;
+                        const scaleY = video.videoHeight / extractHeight;
 
-                            const scaledBox = {
-                                x1: box.x1 * scaleX,
-                                y1: box.y1 * scaleY,
-                                x2: box.x2 * scaleX,
-                                y2: box.y2 * scaleY
-                            };
+                        const scaledBox = {
+                            x1: box.x1 * scaleX,
+                            y1: box.y1 * scaleY,
+                            x2: box.x2 * scaleX,
+                            y2: box.y2 * scaleY
+                        };
 
-                            newTrajectory.push({
-                              time,
-                              box: scaledBox,
-                              center: {
-                                x: (scaledBox.x1 + scaledBox.x2) / 2,
-                                y: (scaledBox.y1 + scaledBox.y2) / 2
-                              },
-                              confidence: bestResult.confidence,
-                              className: bestResult.name || 'ball'
-                            });
-                          }
-                        } else if (result) {
-                          // Log unexpected response format for debugging
-                          console.log("Frame analysis result (no volleyball detected):", time, result);
-                        }
+                        newTrajectory.push({
+                          time,
+                          box: scaledBox,
+                          center: {
+                            x: (scaledBox.x1 + scaledBox.x2) / 2,
+                            y: (scaledBox.y1 + scaledBox.y2) / 2
+                          },
+                          confidence: bestResult.confidence,
+                          className: bestResult.name || 'ball'
+                        });
+                      }
+                    } else if (result === null) {
+                         setModelStatus('error');
                     }
-                    resolve();
-                });
-                batchPromises.push(task);
-            }
+                }
+                resolve();
+            });
+            batchPromises.push(task);
          }
 
          // Wait for the batch to complete network requests
@@ -578,49 +504,9 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
       video.currentTime = originalTime;
       setIsAnalyzing(false);
       setTrajectory(newTrajectory);
+      setModelStatus('active');
       // Re-calculate score based on full trajectory
       calculateFullScore(newTrajectory);
-    }
-  };
-
-  const fetchInference = async (imageBlob: Blob) => {
-    try {
-      const startTime = Date.now();
-      const apiKey = import.meta.env.VITE_ULTRALYTICS_API_KEY || '5ea02b4238fc9528408b8c36dcdb3834e11a9cbf58';
-
-      const formData = new FormData();
-      formData.append('model', 'https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq');
-      formData.append('imgsz', '640');
-      formData.append('conf', '0.25');
-      formData.append('iou', '0.45');
-      formData.append('file', imageBlob, 'frame.jpg');
-
-      // Always use the proxy endpoint (works in both dev and production via Netlify function)
-      const apiUrl = '/api/ultralytics';
-
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!response.ok) {
-        if (response.status === 0 || response.status === 403) {
-           console.warn("API Request failed. This might be a CORS issue or Invalid Key.");
-        }
-        setModelStatus('error');
-        throw new Error(response.statusText);
-      }
-
-      const inferenceTime = Date.now() - startTime;
-      setLastInferenceTime(inferenceTime);
-      setModelStatus('active');
-
-      return await response.json();
-    } catch (err) {
-      console.error("Inference error:", err);
-      console.error(err);
-      setModelStatus('error');
-      return null;
     }
   };
 
@@ -726,134 +612,19 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw Zones
-    zones.forEach(zone => {
-      ctx.strokeStyle = zone.color;
-      ctx.lineWidth = 5;
-      ctx.fillStyle = zone.color + '40'; // Transparent fill
-
-      ctx.beginPath();
-      if (zone.type === 'line') {
-        ctx.moveTo(zone.points[0].x, zone.points[0].y);
-        ctx.lineTo(zone.points[1].x, zone.points[1].y);
-      } else if (zone.type === 'circle') {
-        const r = getDistance(zone.points[0], zone.points[1]);
-        ctx.arc(zone.points[0].x, zone.points[0].y, r, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (zone.type === 'square') {
-         const p1 = zone.points[0];
-         const p2 = zone.points[1];
-         const x = Math.min(p1.x, p2.x);
-         const y = Math.min(p1.y, p2.y);
-         const w = Math.abs(p2.x - p1.x);
-         const h = Math.abs(p2.y - p1.y);
-         ctx.rect(x, y, w, h);
-         ctx.fill();
-      }
-      ctx.stroke();
-
-      // Label
-      ctx.fillStyle = 'white';
-      ctx.font = '30px Arial';
-      ctx.fillText(zone.label, zone.points[0].x + 10, zone.points[0].y - 10);
-    });
+    drawZones(ctx, zones);
 
     // Draw active drawing
     if (drawingPoints.length > 0 && activeTool) {
-       // Draw partial shape... (simplified for now)
+        // Draw partial shape can be implemented here if needed
+        // For simplicity, we just draw the points for now
+        ctx.fillStyle = '#00ffff';
+        drawingPoints.forEach(p => {
+            ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+        });
     }
 
-    // Draw Ball & Trajectory with YOLO-style bounding boxes
-    if (trajectory.length > 0) {
-      // Draw trajectory path
-      ctx.beginPath();
-      ctx.strokeStyle = '#ffff00';
-      ctx.lineWidth = 4;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      trajectory.forEach((t, i) => {
-        if (i === 0) ctx.moveTo(t.center.x, t.center.y);
-        else ctx.lineTo(t.center.x, t.center.y);
-      });
-      ctx.stroke();
-
-      // Draw trajectory points as small circles
-      trajectory.forEach((t, i) => {
-        ctx.beginPath();
-        ctx.fillStyle = i === trajectory.length - 1 ? '#ff00ff' : '#ffff0080';
-        ctx.arc(t.center.x, t.center.y, 6, 0, Math.PI * 2);
-        ctx.fill();
-      });
-
-      // Draw current ball position if near current time (or last point if live)
-      // For live, always show last point. For video, show points near currentTime.
-      let currentPoint = null;
-      if (isLive) {
-          currentPoint = trajectory[trajectory.length - 1];
-      } else {
-          currentPoint = trajectory.find(p => Math.abs(p.time - currentTime) < 0.3);
-      }
-
-      if (currentPoint) {
-        // Draw larger ball position indicator
-        ctx.beginPath();
-        ctx.fillStyle = '#ff00ff';
-        ctx.arc(currentPoint.center.x, currentPoint.center.y, 15, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Draw outer ring for visibility
-        ctx.beginPath();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 3;
-        ctx.arc(currentPoint.center.x, currentPoint.center.y, 18, 0, Math.PI * 2);
-        ctx.stroke();
-
-        // Draw prominent bounding box with double-line effect
-        const boxWidth = currentPoint.box.x2 - currentPoint.box.x1;
-        const boxHeight = currentPoint.box.y2 - currentPoint.box.y1;
-
-        // Outer box (white for contrast)
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 4;
-        ctx.strokeRect(
-          currentPoint.box.x1 - 2,
-          currentPoint.box.y1 - 2,
-          boxWidth + 4,
-          boxHeight + 4
-        );
-
-        // Inner box (magenta)
-        ctx.strokeStyle = '#ff00ff';
-        ctx.lineWidth = 3;
-        ctx.strokeRect(
-          currentPoint.box.x1,
-          currentPoint.box.y1,
-          boxWidth,
-          boxHeight
-        );
-
-        // Draw "BALL" label above bounding box
-        ctx.font = 'bold 24px Arial';
-        ctx.fillStyle = '#ff00ff';
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 3;
-        const labelText = `BALL ${(currentPoint.confidence * 100).toFixed(0)}%`;
-        ctx.strokeText(labelText, currentPoint.box.x1, currentPoint.box.y1 - 10);
-        ctx.fillText(labelText, currentPoint.box.x1, currentPoint.box.y1 - 10);
-      }
-
-      // Draw all detection points as small indicators (dimmed if not current)
-      if (!isLive) {
-          trajectory.forEach((t, idx) => {
-            if (Math.abs(t.time - currentTime) > 0.3) {
-              ctx.beginPath();
-              ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
-              ctx.arc(t.center.x, t.center.y, 4, 0, Math.PI * 2);
-              ctx.fill();
-            }
-          });
-      }
-    }
+    drawTrajectory(ctx, trajectory, currentTime, isLive);
 
   }, [zones, drawingPoints, trajectory, currentTime, isLive, videoRef.current?.videoWidth, videoRef.current?.videoHeight]);
 
@@ -931,7 +702,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                         LIVE
                      </div>
                   </div>
-              )}
+               )}
             </div>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-gray-700 rounded-lg gap-4">
