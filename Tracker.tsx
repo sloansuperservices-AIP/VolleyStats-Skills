@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Play, Pause, Square, Circle, Minus, Plus, Trash2,
   Video, Target, Settings, Upload, ArrowLeft, MousePointer,
-  CheckCircle, AlertCircle, Loader2, PenTool, Type, FileDown
+  CheckCircle, AlertCircle, Loader2, PenTool, Type, FileDown,
+  Camera, StopCircle
 } from 'lucide-react';
 
 // --- Types ---
@@ -93,6 +94,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   // --- State ---
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [isLive, setIsLive] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -119,6 +121,9 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const analysisLoopRef = useRef<number | null>(null);
+  const isLiveAnalysisRunning = useRef(false);
 
   // State for canvas overlay positioning (to match video's object-contain rendering)
   const [canvasStyle, setCanvasStyle] = useState<React.CSSProperties>({});
@@ -167,28 +172,89 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   // --- Video Handling ---
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
+      stopLive();
       const file = e.target.files[0];
       setVideoFile(file);
       setVideoUrl(URL.createObjectURL(file));
-      // Reset state
-      setZones([]);
-      setRules([]);
-      setTrajectory([]);
-      setScore(0);
-      setScoreLog([]);
-      setModelStatus('idle');
-      setLastInferenceTime(null);
-      setVideoDimensions(null);
+      resetState();
     }
   };
 
+  const resetState = () => {
+    setZones([]);
+    setRules([]);
+    setTrajectory([]);
+    setScore(0);
+    setScoreLog([]);
+    setModelStatus('idle');
+    setLastInferenceTime(null);
+    setVideoDimensions(null);
+  };
+
+  const startLive = async () => {
+    try {
+      resetState();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+
+      streamRef.current = stream;
+      setIsLive(true);
+      setVideoUrl('live'); // Trigger view
+      setModelStatus('active');
+
+      // Start analysis loop
+      isLiveAnalysisRunning.current = true;
+      analyzeLiveStream();
+
+    } catch (err) {
+      console.error("Error accessing camera:", err);
+      alert("Could not access camera. Please check permissions.");
+    }
+  };
+
+  const stopLive = () => {
+    isLiveAnalysisRunning.current = false;
+    if (analysisLoopRef.current) {
+        cancelAnimationFrame(analysisLoopRef.current);
+        analysisLoopRef.current = null;
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    setIsLive(false);
+    setVideoUrl(null);
+    setIsAnalyzing(false);
+  };
+
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      stopLive();
+    };
+  }, []);
+
   const handleVideoLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const video = e.currentTarget;
-    setDuration(video.duration);
+    setDuration(video.duration || 0);
     setVideoDimensions({ width: video.videoWidth, height: video.videoHeight });
+    updateCanvasOverlay();
   };
 
   const togglePlay = () => {
+    if (isLive) return; // No play/pause for live
     if (videoRef.current) {
       if (isPlaying) videoRef.current.pause();
       else videoRef.current.play();
@@ -199,7 +265,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       setCurrentTime(videoRef.current.currentTime);
-      checkRules(videoRef.current.currentTime);
+      if (!isLive) checkRules(videoRef.current.currentTime);
     }
   };
 
@@ -222,11 +288,11 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     let offsetY = 0;
 
     if (elementRatio > videoRatio) {
-      // Pillarboxed (black bars on sides)
+      // Pillarboxed
       renderWidth = rect.height * videoRatio;
       offsetX = (rect.width - renderWidth) / 2;
     } else {
-      // Letterboxed (black bars on top/bottom)
+      // Letterboxed
       renderHeight = rect.width / videoRatio;
       offsetY = (rect.height - renderHeight) / 2;
     }
@@ -234,9 +300,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     // Coordinates relative to the canvas element
     const clientX = e.clientX - rect.left;
     const clientY = e.clientY - rect.top;
-
-    // Check if click is within the video area
-    // (Optional: clamp or ignore if outside)
 
     // Map to video source coordinates
     const x = (clientX - offsetX) * (video.videoWidth / renderWidth);
@@ -273,7 +336,99 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     setZones([...zones, newZone]);
   };
 
-  // --- Analysis Logic ---
+  // --- Live Analysis Loop ---
+  const analyzeLiveStream = async () => {
+     if (!videoRef.current || !isLiveAnalysisRunning.current) return;
+
+     const video = videoRef.current;
+     if (video.readyState < 2) {
+        // Wait for video to be ready
+        requestAnimationFrame(analyzeLiveStream);
+        return;
+     }
+
+     const startTime = Date.now();
+
+     // Extract frame
+     const MAX_INFERENCE_DIM = 640;
+     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
+     const extractWidth = Math.round(video.videoWidth * scale);
+     const extractHeight = Math.round(video.videoHeight * scale);
+
+     const hiddenCanvas = document.createElement('canvas');
+     hiddenCanvas.width = extractWidth;
+     hiddenCanvas.height = extractHeight;
+     const ctx = hiddenCanvas.getContext('2d');
+
+     if (ctx) {
+         ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
+         const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
+
+         if (blob && isLiveAnalysisRunning.current) {
+             const result = await fetchInference(blob);
+
+             if (result && result.images && result.images[0] && result.images[0].results) {
+                 // Process results similar to analyzeVideo
+                  const ballDetections = result.images[0].results.filter((r: any) =>
+                    r.name === 'volleyball' ||
+                    r.name === 'sports ball' ||
+                    r.name === 'ball' ||
+                    r.class === 0 ||
+                    r.class === 32
+                  );
+                  ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
+
+                  const bestResult = ballDetections[0];
+                  if (bestResult) {
+                    const box = bestResult.box;
+                    // Scale coordinates back to original video resolution
+                    const scaleX = video.videoWidth / extractWidth;
+                    const scaleY = video.videoHeight / extractHeight;
+
+                    const scaledBox = {
+                        x1: box.x1 * scaleX,
+                        y1: box.y1 * scaleY,
+                        x2: box.x2 * scaleX,
+                        y2: box.y2 * scaleY
+                    };
+
+                    const time = Date.now() / 1000; // Unix timestamp or relative? Use relative to session start?
+                    // For live, maybe just use Date.now() or relative to start.
+                    // Let's use relative to start to keep numbers small.
+                    // But for now, just monotonic.
+
+                    const point: TrajectoryPoint = {
+                      time: time,
+                      box: scaledBox,
+                      center: {
+                        x: (scaledBox.x1 + scaledBox.x2) / 2,
+                        y: (scaledBox.y1 + scaledBox.y2) / 2
+                      },
+                      confidence: bestResult.confidence,
+                      className: bestResult.name || 'ball'
+                    };
+
+                    setTrajectory(prev => {
+                       const newT = [...prev, point];
+                       // Keep only last X seconds/points to avoid memory leak?
+                       // For now keep all.
+                       calculateFullScore(newT); // Re-calc score
+                       return newT;
+                    });
+                  }
+             }
+         }
+     }
+
+     // Throttle loop to avoid overwhelming API
+     // Aim for 5-10 FPS if possible, but API latency dictates.
+     // We just call next one after this one finishes.
+     if (isLiveAnalysisRunning.current) {
+        requestAnimationFrame(analyzeLiveStream);
+     }
+  };
+
+  // --- Analysis Logic (File) ---
   const analyzeVideo = async () => {
     if (!videoRef.current || isAnalyzing) return;
 
@@ -293,13 +448,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     // Create hidden canvas for extraction
     // Optimization: Downscale to 640px max dimension to save bandwidth and encoding time
     // The API expects 640px anyway.
-    const MAX_INFERENCE_DIM = 640;
-    const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
-
-    const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = Math.round(video.videoWidth * scale);
-    hiddenCanvas.height = Math.round(video.videoHeight * scale);
-    // Create hidden canvas for extraction (scaled down for performance)
     const MAX_INFERENCE_DIM = 640;
     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
     const extractWidth = Math.round(video.videoWidth * scale);
@@ -339,7 +487,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
             });
 
             if (ctx) {
-                ctx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                 ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
                 // We MUST await the blob creation before moving to the next frame
                 // because the next iteration will overwrite the canvas.
@@ -365,20 +512,14 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                           if (bestResult) {
                             const box = bestResult.box;
                             // Scale coordinates back to original video resolution
-                            const scaleX = video.videoWidth / hiddenCanvas.width;
-                            const scaleY = video.videoHeight / hiddenCanvas.height;
+                            const scaleX = video.videoWidth / extractWidth;
+                            const scaleY = video.videoHeight / extractHeight;
 
                             const scaledBox = {
                                 x1: box.x1 * scaleX,
                                 y1: box.y1 * scaleY,
                                 x2: box.x2 * scaleX,
                                 y2: box.y2 * scaleY
-                            // Scale coordinates back to original video resolution
-                            const box = {
-                              x1: bestResult.box.x1 / scale,
-                              y1: bestResult.box.y1 / scale,
-                              x2: bestResult.box.x2 / scale,
-                              y2: bestResult.box.y2 / scale
                             };
 
                             newTrajectory.push({
@@ -468,7 +609,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     let currentScore = 0;
     const newLog: {time: number, msg: string}[] = [];
 
-    // Sort trajectory by time
+    // Sort trajectory by time (needed if live appends out of order, though live should be in order)
     const sorted = [...traj].sort((a, b) => a.time - b.time);
 
     for (let i = 1; i < sorted.length; i++) {
@@ -622,8 +763,15 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         ctx.fill();
       });
 
-      // Draw current ball position if near current time with prominent annotation
-      const currentPoint = trajectory.find(p => Math.abs(p.time - currentTime) < 0.3);
+      // Draw current ball position if near current time (or last point if live)
+      // For live, always show last point. For video, show points near currentTime.
+      let currentPoint = null;
+      if (isLive) {
+          currentPoint = trajectory[trajectory.length - 1];
+      } else {
+          currentPoint = trajectory.find(p => Math.abs(p.time - currentTime) < 0.3);
+      }
+
       if (currentPoint) {
         // Draw larger ball position indicator
         ctx.beginPath();
@@ -672,18 +820,20 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         ctx.fillText(labelText, currentPoint.box.x1, currentPoint.box.y1 - 10);
       }
 
-      // Draw all detection points as small indicators
-      trajectory.forEach((t, idx) => {
-        if (Math.abs(t.time - currentTime) > 0.3) {
-          ctx.beginPath();
-          ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
-          ctx.arc(t.center.x, t.center.y, 4, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      });
+      // Draw all detection points as small indicators (dimmed if not current)
+      if (!isLive) {
+          trajectory.forEach((t, idx) => {
+            if (Math.abs(t.time - currentTime) > 0.3) {
+              ctx.beginPath();
+              ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
+              ctx.arc(t.center.x, t.center.y, 4, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          });
+      }
     }
 
-  }, [zones, drawingPoints, trajectory, currentTime, videoRef.current?.videoWidth, videoRef.current?.videoHeight]);
+  }, [zones, drawingPoints, trajectory, currentTime, isLive, videoRef.current?.videoWidth, videoRef.current?.videoHeight]);
 
 
   return (
@@ -715,19 +865,12 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
             >
               <video
                 ref={videoRef}
-                src={videoUrl}
+                src={!isLive ? videoUrl : undefined}
                 className="w-full h-full object-contain"
                 onTimeUpdate={handleTimeUpdate}
-                onLoadedMetadata={(e) => {
-                  setDuration(e.currentTarget.duration);
-                  // Trigger canvas resize when video loads
-                  if (canvasRef.current && e.currentTarget.videoWidth) {
-                    canvasRef.current.width = e.currentTarget.videoWidth;
-                    canvasRef.current.height = e.currentTarget.videoHeight;
-                  }
-                  // Update canvas overlay position to match video's rendered area
-                  updateCanvasOverlay();
-                }}
+                playsInline
+                muted={isLive}
+                onLoadedMetadata={handleVideoLoadedMetadata}
               />
               <canvas
                 ref={canvasRef}
@@ -737,45 +880,67 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
               />
 
               {/* Overlay Controls */}
-              <div className="absolute bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 sm:gap-4 bg-black/60 backdrop-blur px-2 sm:px-4 py-1 sm:py-2 rounded-full border border-white/10 z-10">
-                 <button onClick={togglePlay} className="text-white hover:text-purple-400">
-                   {isPlaying ? <Pause className="fill-current w-4 h-4 sm:w-5 sm:h-5" /> : <Play className="fill-current w-4 h-4 sm:w-5 sm:h-5" />}
-                 </button>
-                 <input
-                   type="range"
-                   min="0"
-                   max={duration || 100}
-                   value={currentTime}
-                   step="0.1"
-                   onChange={(e) => {
-                     const t = parseFloat(e.target.value);
-                     setCurrentTime(t);
-                     if (videoRef.current) videoRef.current.currentTime = t;
-                   }}
-                   className="w-24 sm:w-48 lg:w-64 accent-purple-500"
-                 />
-                 <span className="text-xs font-mono w-20 sm:w-24 text-right">
-                   {currentTime.toFixed(1)}s / {duration.toFixed(1)}s
-                 </span>
-              </div>
+              {!isLive ? (
+                  <div className="absolute bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 sm:gap-4 bg-black/60 backdrop-blur px-2 sm:px-4 py-1 sm:py-2 rounded-full border border-white/10 z-10">
+                     <button onClick={togglePlay} className="text-white hover:text-purple-400">
+                       {isPlaying ? <Pause className="fill-current w-4 h-4 sm:w-5 sm:h-5" /> : <Play className="fill-current w-4 h-4 sm:w-5 sm:h-5" />}
+                     </button>
+                     <input
+                       type="range"
+                       min="0"
+                       max={duration || 100}
+                       value={currentTime}
+                       step="0.1"
+                       onChange={(e) => {
+                         const t = parseFloat(e.target.value);
+                         setCurrentTime(t);
+                         if (videoRef.current) videoRef.current.currentTime = t;
+                       }}
+                       className="w-24 sm:w-48 lg:w-64 accent-purple-500"
+                     />
+                     <span className="text-xs font-mono w-20 sm:w-24 text-right">
+                       {currentTime.toFixed(1)}s / {duration.toFixed(1)}s
+                     </span>
+                  </div>
+              ) : (
+                  <div className="absolute top-4 left-4 z-20">
+                     <div className="flex items-center gap-2 bg-red-600/80 backdrop-blur text-white px-3 py-1 rounded-full text-xs font-bold animate-pulse">
+                        <div className="w-2 h-2 bg-white rounded-full" />
+                        LIVE
+                     </div>
+                  </div>
+              )}
             </div>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-gray-700 rounded-lg">
-              <Upload className="w-12 h-12 text-gray-500 mb-4" />
-              <p className="text-gray-400 mb-4">Upload a video to start tracking</p>
-              <input
-                type="file"
-                accept="video/*"
-                id="video-upload"
-                className="hidden"
-                onChange={handleFileChange}
-              />
-              <label
-                htmlFor="video-upload"
-                className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-2 rounded-lg cursor-pointer font-bold transition-colors"
-              >
-                Select Video
-              </label>
+            <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-gray-700 rounded-lg gap-4">
+              <div className="text-center">
+                  <Upload className="w-12 h-12 text-gray-500 mb-4 mx-auto" />
+                  <p className="text-gray-400 mb-2">Upload a video to start tracking</p>
+                  <input
+                    type="file"
+                    accept="video/*"
+                    id="video-upload"
+                    className="hidden"
+                    onChange={handleFileChange}
+                  />
+                  <label
+                    htmlFor="video-upload"
+                    className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-2 rounded-lg cursor-pointer font-bold transition-colors inline-block"
+                  >
+                    Select Video
+                  </label>
+              </div>
+
+              <div className="text-gray-600 font-bold">- OR -</div>
+
+              <div className="text-center">
+                   <button
+                    onClick={startLive}
+                     className="bg-red-600 hover:bg-red-500 text-white px-6 py-2 rounded-lg cursor-pointer font-bold transition-colors flex items-center gap-2"
+                   >
+                     <Camera className="w-5 h-5" /> Use Live Camera
+                   </button>
+              </div>
             </div>
           )}
         </div>
@@ -788,7 +953,15 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
             <h3 className="font-bold text-gray-200 mb-2 flex items-center gap-2 text-sm">
               <Video className="w-4 h-4 text-purple-400" /> Analysis
             </h3>
-            {isAnalyzing ? (
+
+            {isLive ? (
+                <button
+                    onClick={stopLive}
+                    className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
+                  >
+                    <StopCircle className="w-4 h-4" /> Stop Live Camera
+                </button>
+            ) : isAnalyzing ? (
               <div className="text-center py-2">
                 <Loader2 className="w-6 h-6 text-purple-500 animate-spin mx-auto mb-2" />
                 <p className="text-xs text-gray-400">Processing video frame by frame...</p>
@@ -800,17 +973,18 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
             ) : (
               <button
                 onClick={analyzeVideo}
-                disabled={!videoUrl}
+                disabled={!videoUrl || isLive}
                 className="w-full bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
               >
                 <Target className="w-4 h-4" /> Start Tracking Analysis
               </button>
             )}
+
             {trajectory.length > 0 && (
               <div className="mt-2 flex flex-col gap-2">
                 <div className="p-2 bg-green-900/20 border border-green-500/30 rounded text-xs text-green-400 flex items-center gap-2">
                   <CheckCircle className="w-3 h-3" />
-                  Tracking Complete ({trajectory.length} frames)
+                  Tracking ({trajectory.length} points)
                 </div>
                 <button
                    onClick={() => {
