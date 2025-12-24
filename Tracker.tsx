@@ -510,12 +510,10 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     hiddenCanvas.width = workWidth;
     hiddenCanvas.height = workHeight;
     const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
-    // Optimization: Downscale to 640px max dimension to save bandwidth and encoding time
-    // The API expects 640px anyway.
-    const MAX_INFERENCE_DIM = 640;
-    const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
-    const extractWidth = Math.round(video.videoWidth * scale);
-    const extractHeight = Math.round(video.videoHeight * scale);
+
+    // Use workWidth/workHeight as extract dimensions
+    const extractWidth = workWidth;
+    const extractHeight = workHeight;
 
     // Store current time to restore later
     const originalTime = video.currentTime;
