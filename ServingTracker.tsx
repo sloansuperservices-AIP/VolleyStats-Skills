@@ -675,8 +675,20 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   useEffect(() => {
     const handleResize = updateCanvasOverlay;
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+
+    const resizeObserver = new ResizeObserver(() => {
+      updateCanvasOverlay();
+    });
+
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
+    };
+  }, [viewMode, videoUrl]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -874,7 +886,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
               />
               <canvas
                 ref={canvasRef}
-                className="pointer-events-auto z-10"
+                className="absolute pointer-events-auto z-10"
                 onClick={handleCanvasClick}
                 style={{ cursor: isDrawingCourt ? 'crosshair' : 'default', ...canvasStyle }}
               />
