@@ -6,17 +6,21 @@ import {
   LayoutGrid, BarChart2, Eye, Camera, StopCircle
 } from 'lucide-react';
 
+import {
+  Point,
+  getDistance,
+  isPointInRect
+} from './utils/math';
+import {
+  calculateScalingRatio,
+  extractFrameFromVideo
+} from './utils/video';
+import {
+  TrajectoryPoint
+} from './utils/drawing';
+import { fetchInference } from './utils/inference';
+
 // --- Types ---
-
-type Point = { x: number; y: number };
-
-interface TrajectoryPoint {
-  time: number;
-  box: { x1: number; y1: number; x2: number; y2: number };
-  center: Point;
-  confidence: number;
-  className?: string;
-}
 
 interface ServingTrackerProps {
   onBack: () => void;
@@ -24,16 +28,13 @@ interface ServingTrackerProps {
 
 // --- Helpers ---
 
-// Geometry Helpers
-const getDistance = (p1: Point, p2: Point) => Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
-
-const isPointInRect = (point: Point, p1: Point, p2: Point) => {
-  const xMin = Math.min(p1.x, p2.x);
-  const xMax = Math.max(p1.x, p2.x);
-  const yMin = Math.min(p1.y, p2.y);
-  const yMax = Math.max(p1.y, p2.y);
-  return point.x >= xMin && point.x <= xMax && point.y >= yMin && point.y <= yMax;
-};
+// Presets for target zones
+const ZONE_PRESETS = [
+    { label: 'Deep Corners', targets: [0, 2] },
+    { label: 'Short Serve', targets: [6, 7, 8] },
+    { label: 'Line Serving', targets: [0, 3, 6, 2, 5, 8] },
+    { label: 'Cross Court', targets: [0, 8, 2, 6] }
+];
 
 export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   // --- State ---
@@ -76,6 +77,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const isLiveAnalysisRunning = useRef(false);
+  const lastFrameTimeRef = useRef<number>(0);
 
   const [canvasStyle, setCanvasStyle] = useState<React.CSSProperties>({});
 
@@ -148,6 +150,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
       setModelStatus('active');
 
       isLiveAnalysisRunning.current = true;
+      lastFrameTimeRef.current = 0;
       analyzeLiveStream();
     } catch (err) {
       console.error("Error accessing camera:", err);
@@ -209,19 +212,6 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     const video = videoRef.current;
     const rect = canvas.getBoundingClientRect();
 
-    // Match video resolution mapping
-    // Note: canvas.width/height are set to video source dims
-
-    // We need to account for object-fit: contain logic in updateCanvasOverlay
-    // Wait, updateCanvasOverlay sets canvas size/position to match video render.
-    // So canvas coordinates = video coordinates * (videoWidth / renderWidth)?
-    // No, updateCanvasOverlay resizes the canvas container? No, it resizes the canvas style.
-    // The internal resolution is set to video.videoWidth/Height.
-    // The displayed resolution is set by CSS.
-
-    // If canvas matches video rect exactly (which updateCanvasOverlay tries to ensure),
-    // Then we just map element coords to internal coords.
-
     const scaleX = video.videoWidth / rect.width;
     const scaleY = video.videoHeight / rect.height;
 
@@ -260,13 +250,8 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
         if (targetQuadrants.includes(index)) {
           setTargetQuadrants(targetQuadrants.filter(i => i !== index));
         } else {
-          if (targetQuadrants.length < 2) {
-            setTargetQuadrants([...targetQuadrants, index]);
-          } else {
-             // Replace the oldest one? Or just block? Let's block.
-             // Or shift. Let's block for now as per "pick up to 2".
-             // Actually user might want to change, so removing is fine.
-          }
+          // Allow multiple selections
+          setTargetQuadrants([...targetQuadrants, index]);
         }
       }
     }
@@ -293,67 +278,68 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
         return;
      }
 
-     // Extract frame
-     const MAX_INFERENCE_DIM = 640;
-     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
-     const extractWidth = Math.round(video.videoWidth * scale);
-     const extractHeight = Math.round(video.videoHeight * scale);
+      // Throttling: 10 FPS = 100ms interval
+     const now = Date.now();
+     if (now - lastFrameTimeRef.current < 100) {
+        requestAnimationFrame(analyzeLiveStream);
+        return;
+     }
+     lastFrameTimeRef.current = now;
 
-     const hiddenCanvas = document.createElement('canvas');
-     hiddenCanvas.width = extractWidth;
-     hiddenCanvas.height = extractHeight;
-     const ctx = hiddenCanvas.getContext('2d');
+     const scaleRatio = calculateScalingRatio(video.videoWidth, video.videoHeight);
+     const extractWidth = Math.round(video.videoWidth * scaleRatio);
+     const extractHeight = Math.round(video.videoHeight * scaleRatio);
 
-     if (ctx) {
-         ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
-         const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
+     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight);
 
-         if (blob && isLiveAnalysisRunning.current) {
-             const result = await fetchInference(blob);
+     if (blob && isLiveAnalysisRunning.current) {
+         const result = await fetchInference(blob);
 
-             if (result && result.images && result.images[0] && result.images[0].results) {
-                  const ballDetections = result.images[0].results.filter((r: any) =>
-                    r.name === 'volleyball' ||
-                    r.name === 'sports ball' ||
-                    r.name === 'ball' ||
-                    r.class === 0 ||
-                    r.class === 32
-                  );
-                  ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
+         if (result && result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
+              setLastInferenceTime(result.inferenceTime);
+              const ballDetections = result.data.images[0].results.filter((r: any) =>
+                r.name === 'volleyball' ||
+                r.name === 'sports ball' ||
+                r.name === 'ball' ||
+                r.class === 0 ||
+                r.class === 32
+              );
+              ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
 
-                  const bestResult = ballDetections[0];
-                  if (bestResult) {
-                    const box = bestResult.box;
-                    const scaleX = video.videoWidth / extractWidth;
-                    const scaleY = video.videoHeight / extractHeight;
+              const bestResult = ballDetections[0];
+              if (bestResult) {
+                const box = bestResult.box;
+                const scaleX = video.videoWidth / extractWidth;
+                const scaleY = video.videoHeight / extractHeight;
 
-                    const scaledBox = {
-                        x1: box.x1 * scaleX,
-                        y1: box.y1 * scaleY,
-                        x2: box.x2 * scaleX,
-                        y2: box.y2 * scaleY
-                    };
+                const scaledBox = {
+                    x1: box.x1 * scaleX,
+                    y1: box.y1 * scaleY,
+                    x2: box.x2 * scaleX,
+                    y2: box.y2 * scaleY
+                };
 
-                    const time = Date.now() / 1000;
+                const time = Date.now() / 1000;
 
-                    const point: TrajectoryPoint = {
-                      time: time,
-                      box: scaledBox,
-                      center: {
-                        x: (scaledBox.x1 + scaledBox.x2) / 2,
-                        y: (scaledBox.y1 + scaledBox.y2) / 2
-                      },
-                      confidence: bestResult.confidence,
-                      className: bestResult.name || 'ball'
-                    };
+                const point: TrajectoryPoint = {
+                  time: time,
+                  box: scaledBox,
+                  center: {
+                    x: (scaledBox.x1 + scaledBox.x2) / 2,
+                    y: (scaledBox.y1 + scaledBox.y2) / 2
+                  },
+                  confidence: bestResult.confidence,
+                  className: bestResult.name || 'ball'
+                };
 
-                    setTrajectory(prev => {
-                       const newT = [...prev, point];
-                       detectLandings(newT); // Update landings in real-time
-                       return newT;
-                    });
-                  }
-             }
+                setTrajectory(prev => {
+                   const newT = [...prev, point];
+                   detectLandings(newT); // Update landings in real-time
+                   return newT;
+                });
+              }
+         } else if (result === null) {
+             setModelStatus('error');
          }
      }
 
@@ -378,24 +364,17 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     const totalSteps = Math.floor(duration / interval);
     const newTrajectory: TrajectoryPoint[] = [];
 
-    // Performance Optimization: Downscale frame to model's input size (640px)
-    const MAX_INFERENCE_DIMENSION = 640;
-    const scaleRatio = Math.min(
-      1,
-      MAX_INFERENCE_DIMENSION / Math.max(video.videoWidth, video.videoHeight)
-    );
-    const workWidth = Math.round(video.videoWidth * scaleRatio);
-    const workHeight = Math.round(video.videoHeight * scaleRatio);
+    const scaleRatio = calculateScalingRatio(video.videoWidth, video.videoHeight);
+    const extractWidth = Math.round(video.videoWidth * scaleRatio);
+    const extractHeight = Math.round(video.videoHeight * scaleRatio);
 
     const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = workWidth;
-    hiddenCanvas.height = workHeight;
+    hiddenCanvas.width = extractWidth;
+    hiddenCanvas.height = extractHeight;
     const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
-    // Optimization: Downscale to 640px max dimension
-    const MAX_INFERENCE_DIM = 640;
-    const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
-    const extractWidth = Math.round(video.videoWidth * scale);
-    const extractHeight = Math.round(video.videoHeight * scale);
+
+    if (!ctx) return;
+
     const originalTime = video.currentTime;
     video.pause();
 
@@ -416,45 +395,44 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
               video.addEventListener('seeked', onSeek);
             });
 
-            if (ctx) {
-                ctx.drawImage(video, 0, 0, workWidth, workHeight);
-                ctx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-                ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
-                const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
+            // Reuse context and extract frame
+            const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, ctx);
 
-                const task = new Promise<void>(async (resolve) => {
-                    if (blob) {
-                       const result = await fetchInference(blob);
-                        if (result && result.images && result.images[0] && result.images[0].results) {
-                          const ballDetections = result.images[0].results.filter((r: any) =>
-                            r.name === 'volleyball' || r.name === 'sports ball' || r.name === 'ball' || r.class === 0 || r.class === 32
-                          );
-                          ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
-                          const bestResult = ballDetections[0];
-                          if (bestResult) {
-                            const box = bestResult.box;
-                            // Scale coordinates back
-                            const scaleX = video.videoWidth / extractWidth;
-                            const scaleY = video.videoHeight / extractHeight;
-                            const scaledBox = {
-                                x1: box.x1 * scaleX,
-                                y1: box.y1 * scaleY,
-                                x2: box.x2 * scaleX,
-                                y2: box.y2 * scaleY
-                            };
-                            newTrajectory.push({
-                              time,
-                              box: scaledBox,
-                              center: { x: (scaledBox.x1 + scaledBox.x2) / 2, y: (scaledBox.y1 + scaledBox.y2) / 2 },
-                              confidence: bestResult.confidence
-                            });
-                          }
-                        }
+            const task = new Promise<void>(async (resolve) => {
+                if (blob) {
+                   const result = await fetchInference(blob);
+                    if (result && result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
+                      setLastInferenceTime(result.inferenceTime);
+                      const ballDetections = result.data.images[0].results.filter((r: any) =>
+                        r.name === 'volleyball' || r.name === 'sports ball' || r.name === 'ball' || r.class === 0 || r.class === 32
+                      );
+                      ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
+                      const bestResult = ballDetections[0];
+                      if (bestResult) {
+                        const box = bestResult.box;
+                        // Scale coordinates back
+                        const scaleX = video.videoWidth / extractWidth;
+                        const scaleY = video.videoHeight / extractHeight;
+                        const scaledBox = {
+                            x1: box.x1 * scaleX,
+                            y1: box.y1 * scaleY,
+                            x2: box.x2 * scaleX,
+                            y2: box.y2 * scaleY
+                        };
+                        newTrajectory.push({
+                          time,
+                          box: scaledBox,
+                          center: { x: (scaledBox.x1 + scaledBox.x2) / 2, y: (scaledBox.y1 + scaledBox.y2) / 2 },
+                          confidence: bestResult.confidence
+                        });
+                      }
+                    } else if (result === null) {
+                         setModelStatus('error');
                     }
-                    resolve();
-                });
-                batchPromises.push(task);
-            }
+                }
+                resolve();
+            });
+            batchPromises.push(task);
          }
          await Promise.all(batchPromises);
          setAnalysisProgress(Math.round(((i + BATCH_SIZE) / totalSteps) * 100));
@@ -469,6 +447,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
       // Post-process: Filter noise and sort
       newTrajectory.sort((a, b) => a.time - b.time);
       setTrajectory(newTrajectory);
+      setModelStatus('active');
 
       // Calculate Landings
       detectLandings(newTrajectory);
@@ -480,7 +459,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
 
     // Header
     const headers = ['Time (s)', 'X (px)', 'Y (px)', 'Event', 'Zone'];
-    const rows = [];
+    const rows: string[] = [];
 
     // Combine trajectory and landings
     // We'll list all trajectory points, and mark landings
@@ -524,29 +503,6 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  };
-
-  const fetchInference = async (imageBlob: Blob) => {
-    try {
-      const startTime = Date.now();
-      const formData = new FormData();
-      formData.append('model', 'https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq');
-      formData.append('imgsz', '640');
-      formData.append('conf', '0.25');
-      formData.append('iou', '0.45');
-      formData.append('file', imageBlob, 'frame.jpg');
-
-      // Use proxy
-      const response = await fetch('/api/ultralytics', { method: 'POST', body: formData });
-      if (!response.ok) throw new Error(response.statusText);
-
-      setLastInferenceTime(Date.now() - startTime);
-      setModelStatus('active');
-      return await response.json();
-    } catch (err) {
-      setModelStatus('error');
-      return null;
-    }
   };
 
   // --- Landing Detection ---
@@ -607,13 +563,6 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
 
     // Efficiency: Hits in Target / Total Attempts
     const targetHits = targetQuadrants.reduce((acc, idx) => acc + quadrantStats[idx].count, 0);
-    // User sets "Serves Allowed" (e.g. 10). If we detected 12, maybe use detected.
-    // If we detected 5, use 5.
-    // The prompt says "dividing attempts of serves by percentage of where it landed".
-    // This phrasing is weird. Let's stick to "Hit Rate = Hits in Target / Total DETECTED Landings".
-    // Or if user set "Serves Allowed", maybe that's the denominator?
-    // Let's use Total DETECTED Landings as denominator for distribution,
-    // but maybe display Serves Allowed as a limit or goal.
 
     const efficiency = totalLandings > 0 ? (targetHits / totalLandings) * 100 : 0;
 
@@ -856,6 +805,18 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
                      </div>
                   </div>
                )}
+
+              {/* Real-time stats overlay in Video Mode */}
+               <div className="absolute top-4 left-4 z-10 bg-black/50 backdrop-blur p-2 rounded text-xs text-white border border-white/10">
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-400">Total:</span>
+                    <span className="font-bold">{stats.total}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-400">Target %:</span>
+                    <span className="font-bold text-green-400">{stats.efficiency.toFixed(0)}%</span>
+                  </div>
+               </div>
             </div>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-gray-700 rounded-lg gap-4">
@@ -916,9 +877,28 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
 
                {courtPoints.length === 2 && (
                  <div>
-                   <label className="text-xs text-gray-400 block mb-1">Step 2: Select Targets (Max 2)</label>
-                   <p className="text-xs text-gray-500 mb-2">Click on the grid cells in the video to select target zones.</p>
-                   <div className="flex gap-2">
+                   <label className="text-xs text-gray-400 block mb-1">Step 2: Select Target Zones</label>
+
+                   {/* Presets Dropdown */}
+                   <select
+                      className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm text-white mb-2"
+                      onChange={(e) => {
+                          const preset = ZONE_PRESETS.find(p => p.label === e.target.value);
+                          if (preset) {
+                              setTargetQuadrants(preset.targets);
+                          } else {
+                              setTargetQuadrants([]);
+                          }
+                      }}
+                   >
+                       <option value="">-- Select Preset --</option>
+                       {ZONE_PRESETS.map(p => (
+                           <option key={p.label} value={p.label}>{p.label}</option>
+                       ))}
+                   </select>
+
+                   <p className="text-xs text-gray-500 mb-2">Or click on grid cells to manually select.</p>
+                   <div className="flex gap-2 flex-wrap">
                      {targetQuadrants.map((q, i) => (
                        <span key={q} className="bg-blue-900 text-blue-200 text-xs px-2 py-1 rounded border border-blue-700">
                          Zone {q + 1}
