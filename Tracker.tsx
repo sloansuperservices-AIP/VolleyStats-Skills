@@ -81,6 +81,16 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   const streamRef = useRef<MediaStream | null>(null);
   const analysisLoopRef = useRef<number | null>(null);
   const isLiveAnalysisRunning = useRef(false);
+  const rulesRef = useRef<Rule[]>(rules);
+  const zonesRef = useRef<Zone[]>(zones);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const startTimeRef = useRef<number>(0);
+
+  useEffect(() => {
+    rulesRef.current = rules;
+    zonesRef.current = zones;
+  }, [rules, zones]);
   const lastFrameTimeRef = useRef<number>(0);
 
   // State for canvas overlay positioning (to match video's object-contain rendering)
@@ -156,6 +166,16 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
       });
 
+      // Start Recording
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      startTimeRef.current = Date.now();
+
       streamRef.current = stream;
       setIsLive(true);
       setVideoUrl('live'); // Trigger view
@@ -179,6 +199,32 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         analysisLoopRef.current = null;
     }
 
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      // Handle the data
+      // We need to wait a moment for the 'stop' event to fire if we relied on event listener,
+      // but simpler is to handle it here if we assume chunks are pushed?
+      // Actually, 'stop' event is async. Better to set onstop in startLive or here.
+      mediaRecorderRef.current.onstop = () => {
+         const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+         const file = new File([blob], "live_recording.webm", { type: 'video/webm' });
+         setVideoFile(file);
+         const url = URL.createObjectURL(file);
+         setVideoUrl(url);
+         // Do NOT reset state here, so user can see what happened
+         setIsLive(false);
+         setIsAnalyzing(false);
+         if (videoRef.current) {
+             videoRef.current.srcObject = null;
+             videoRef.current.src = url;
+         }
+      };
+    } else {
+        setIsLive(false);
+        setVideoUrl(null);
+        setIsAnalyzing(false);
+    }
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
@@ -187,10 +233,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
-
-    setIsLive(false);
-    setVideoUrl(null);
-    setIsAnalyzing(false);
   };
 
   // Clean up on unmount
@@ -315,6 +357,58 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         return;
      }
 
+     const startTime = Date.now();
+
+     // Extract frame
+     const MAX_INFERENCE_DIM = 640;
+     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
+     const extractWidth = Math.round(video.videoWidth * scale);
+     const extractHeight = Math.round(video.videoHeight * scale);
+
+     const hiddenCanvas = document.createElement('canvas');
+     hiddenCanvas.width = extractWidth;
+     hiddenCanvas.height = extractHeight;
+     const ctx = hiddenCanvas.getContext('2d');
+
+     if (ctx) {
+         ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
+         const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
+
+         if (blob && isLiveAnalysisRunning.current) {
+             const result = await fetchInference(blob);
+
+             if (result && result.images && result.images[0] && result.images[0].results) {
+                 // Process results similar to analyzeVideo
+                  const ballDetections = result.images[0].results.filter((r: any) =>
+                    r.name === 'volleyball' ||
+                    r.name === 'sports ball' ||
+                    r.name === 'ball' ||
+                    r.class === 0 ||
+                    r.class === 32
+                  );
+                  ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
+
+                  const bestResult = ballDetections[0];
+                  if (bestResult) {
+                    const box = bestResult.box;
+                    // Scale coordinates back to original video resolution
+                    const scaleX = video.videoWidth / extractWidth;
+                    const scaleY = video.videoHeight / extractHeight;
+
+                    const scaledBox = {
+                        x1: box.x1 * scaleX,
+                        y1: box.y1 * scaleY,
+                        x2: box.x2 * scaleX,
+                        y2: box.y2 * scaleY
+                    };
+
+                    // Use relative time from start of recording to align with video playback later
+                    const time = (Date.now() - startTimeRef.current) / 1000;
+
+                    const point: TrajectoryPoint = {
+                      time: time,
+                      box: scaledBox,
+                      center: {
      // Throttling: 10 FPS = 100ms interval
      const now = Date.now();
      if (now - lastFrameTimeRef.current < 100) {
@@ -413,8 +507,11 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     hiddenCanvas.height = extractHeight;
     const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
 
-    if (!ctx) return;
+    // Use workWidth/workHeight as extract dimensions
+    const extractWidth = workWidth;
+    const extractHeight = workHeight;
 
+    // Store current time to restore later
     const originalTime = video.currentTime;
     video.pause();
 
@@ -524,8 +621,12 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
       const prev = sorted[i-1];
       const curr = sorted[i];
 
-      rules.forEach(rule => {
-        const zone = zones.find(z => z.id === rule.zoneId);
+      // Use refs to get latest rules/zones state during live updates
+      const currentRules = rulesRef.current;
+      const currentZones = zonesRef.current;
+
+      currentRules.forEach(rule => {
+        const zone = currentZones.find(z => z.id === rule.zoneId);
         if (!zone) return;
 
         let triggered = false;

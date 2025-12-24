@@ -77,6 +77,14 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const isLiveAnalysisRunning = useRef(false);
+  const courtPointsRef = useRef<Point[]>(courtPoints);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const startTimeRef = useRef<number>(0);
+
+  useEffect(() => {
+    courtPointsRef.current = courtPoints;
+  }, [courtPoints]);
   const lastFrameTimeRef = useRef<number>(0);
 
   const [canvasStyle, setCanvasStyle] = useState<React.CSSProperties>({});
@@ -144,6 +152,16 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
         video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
       });
 
+      // Start Recording
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      startTimeRef.current = Date.now();
+
       streamRef.current = stream;
       setIsLive(true);
       setVideoUrl('live');
@@ -161,6 +179,27 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   const stopLive = () => {
     isLiveAnalysisRunning.current = false;
 
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.onstop = () => {
+         const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+         const file = new File([blob], "live_recording.webm", { type: 'video/webm' });
+         setVideoFile(file);
+         const url = URL.createObjectURL(file);
+         setVideoUrl(url);
+         setIsLive(false);
+         setIsAnalyzing(false);
+         if (videoRef.current) {
+             videoRef.current.srcObject = null;
+             videoRef.current.src = url;
+         }
+      };
+    } else {
+        setIsLive(false);
+        setVideoUrl(null);
+        setIsAnalyzing(false);
+    }
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
@@ -169,10 +208,6 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
-
-    setIsLive(false);
-    setVideoUrl(null);
-    setIsAnalyzing(false);
   };
 
   // Clean up on unmount
@@ -278,6 +313,67 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
         return;
      }
 
+     // Extract frame
+     const MAX_INFERENCE_DIM = 640;
+     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
+     const extractWidth = Math.round(video.videoWidth * scale);
+     const extractHeight = Math.round(video.videoHeight * scale);
+
+     const hiddenCanvas = document.createElement('canvas');
+     hiddenCanvas.width = extractWidth;
+     hiddenCanvas.height = extractHeight;
+     const ctx = hiddenCanvas.getContext('2d');
+
+     if (ctx) {
+         ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
+         const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
+
+         if (blob && isLiveAnalysisRunning.current) {
+             const result = await fetchInference(blob);
+
+             if (result && result.images && result.images[0] && result.images[0].results) {
+                  const ballDetections = result.images[0].results.filter((r: any) =>
+                    r.name === 'volleyball' ||
+                    r.name === 'sports ball' ||
+                    r.name === 'ball' ||
+                    r.class === 0 ||
+                    r.class === 32
+                  );
+                  ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
+
+                  const bestResult = ballDetections[0];
+                  if (bestResult) {
+                    const box = bestResult.box;
+                    const scaleX = video.videoWidth / extractWidth;
+                    const scaleY = video.videoHeight / extractHeight;
+
+                    const scaledBox = {
+                        x1: box.x1 * scaleX,
+                        y1: box.y1 * scaleY,
+                        x2: box.x2 * scaleX,
+                        y2: box.y2 * scaleY
+                    };
+
+                    const time = (Date.now() - startTimeRef.current) / 1000;
+
+                    const point: TrajectoryPoint = {
+                      time: time,
+                      box: scaledBox,
+                      center: {
+                        x: (scaledBox.x1 + scaledBox.x2) / 2,
+                        y: (scaledBox.y1 + scaledBox.y2) / 2
+                      },
+                      confidence: bestResult.confidence,
+                      className: bestResult.name || 'ball'
+                    };
+
+                    setTrajectory(prev => {
+                       const newT = [...prev, point];
+                       detectLandings(newT); // Update landings in real-time
+                       return newT;
+                    });
+                  }
+             }
       // Throttling: 10 FPS = 100ms interval
      const now = Date.now();
      if (now - lastFrameTimeRef.current < 100) {
@@ -372,6 +468,11 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     hiddenCanvas.width = extractWidth;
     hiddenCanvas.height = extractHeight;
     const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
+    // Optimization: Downscale to 640px max dimension
+    const MAX_INFERENCE_DIM = 640;
+    const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
+    const extractWidth = Math.round(video.videoWidth * scale);
+    const extractHeight = Math.round(video.videoHeight * scale);
 
     if (!ctx) return;
 
@@ -508,6 +609,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   // --- Landing Detection ---
   const detectLandings = (traj: TrajectoryPoint[]) => {
     const landings: Point[] = [];
+    const currentCourtPoints = courtPointsRef.current;
 
     // Heuristic: Local Maxima of Y (lowest visual point on screen = higher Y value in canvas coords)
     // AND must be within court if court is defined (optional, but good for filtering)
@@ -526,8 +628,8 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
 
             // It's a bounce candidate.
             // Check if it's inside the court boundary (if defined)
-            if (courtPoints.length === 2) {
-              if (isPointInRect(curr.center, courtPoints[0], courtPoints[1])) {
+            if (currentCourtPoints.length === 2) {
+              if (isPointInRect(curr.center, currentCourtPoints[0], currentCourtPoints[1])) {
                 landings.push(curr.center);
               }
             } else {
