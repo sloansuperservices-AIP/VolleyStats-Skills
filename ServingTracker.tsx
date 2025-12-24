@@ -375,6 +375,19 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     const totalSteps = Math.floor(duration / interval);
     const newTrajectory: TrajectoryPoint[] = [];
 
+    // Performance Optimization: Downscale frame to model's input size (640px)
+    const MAX_INFERENCE_DIMENSION = 640;
+    const scaleRatio = Math.min(
+      1,
+      MAX_INFERENCE_DIMENSION / Math.max(video.videoWidth, video.videoHeight)
+    );
+    const workWidth = Math.round(video.videoWidth * scaleRatio);
+    const workHeight = Math.round(video.videoHeight * scaleRatio);
+
+    const hiddenCanvas = document.createElement('canvas');
+    hiddenCanvas.width = workWidth;
+    hiddenCanvas.height = workHeight;
+    const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
     // Optimization: Downscale to 640px max dimension
     const MAX_INFERENCE_DIM = 640;
     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
@@ -409,6 +422,8 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
             });
 
             if (ctx) {
+                ctx.drawImage(video, 0, 0, workWidth, workHeight);
+                ctx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                 ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
                 const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
 
@@ -422,6 +437,13 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
                           ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
                           const bestResult = ballDetections[0];
                           if (bestResult) {
+                            // Scale box back to original video dimensions
+                            const scaleFactor = 1 / scaleRatio;
+                            const box = {
+                              x1: bestResult.box.x1 * scaleFactor,
+                              y1: bestResult.box.y1 * scaleFactor,
+                              x2: bestResult.box.x2 * scaleFactor,
+                              y2: bestResult.box.y2 * scaleFactor
                             const box = bestResult.box;
                             // Scale coordinates back
                             const scaleX = video.videoWidth / extractWidth;

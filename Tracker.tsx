@@ -453,6 +453,20 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     const newTrajectory: TrajectoryPoint[] = [];
 
     // Create hidden canvas for extraction
+    // Performance Optimization: Downscale frame to model's input size (640px)
+    // This reduces toBlob encoding time and upload bandwidth significantly.
+    const MAX_INFERENCE_DIMENSION = 640;
+    const scaleRatio = Math.min(
+      1,
+      MAX_INFERENCE_DIMENSION / Math.max(video.videoWidth, video.videoHeight)
+    );
+    const workWidth = Math.round(video.videoWidth * scaleRatio);
+    const workHeight = Math.round(video.videoHeight * scaleRatio);
+
+    const hiddenCanvas = document.createElement('canvas');
+    hiddenCanvas.width = workWidth;
+    hiddenCanvas.height = workHeight;
+    const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
     // Optimization: Downscale to 640px max dimension to save bandwidth and encoding time
     // The API expects 640px anyway.
     const MAX_INFERENCE_DIM = 640;
@@ -498,6 +512,8 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
             });
 
             if (ctx) {
+                // Draw scaled down frame
+                ctx.drawImage(video, 0, 0, workWidth, workHeight);
                 ctx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                 ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
                 // We MUST await the blob creation before moving to the next frame
@@ -522,6 +538,13 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
                           const bestResult = ballDetections[0];
                           if (bestResult) {
+                            // Scale box back to original video dimensions
+                            const scaleFactor = 1 / scaleRatio;
+                            const box = {
+                              x1: bestResult.box.x1 * scaleFactor,
+                              y1: bestResult.box.y1 * scaleFactor,
+                              x2: bestResult.box.x2 * scaleFactor,
+                              y2: bestResult.box.y2 * scaleFactor
                             const box = bestResult.box;
                             // Scale coordinates back to original video resolution
                             const scaleX = video.videoWidth / extractWidth;
