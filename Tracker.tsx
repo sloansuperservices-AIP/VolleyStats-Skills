@@ -186,6 +186,14 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     const video = e.currentTarget;
     setDuration(video.duration);
     setVideoDimensions({ width: video.videoWidth, height: video.videoHeight });
+
+    // Trigger canvas resize when video loads
+    if (canvasRef.current && video.videoWidth) {
+      canvasRef.current.width = video.videoWidth;
+      canvasRef.current.height = video.videoHeight;
+    }
+    // Update canvas overlay position to match video's rendered area
+    updateCanvasOverlay();
   };
 
   const togglePlay = () => {
@@ -296,12 +304,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     const MAX_INFERENCE_DIM = 640;
     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
 
-    const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = Math.round(video.videoWidth * scale);
-    hiddenCanvas.height = Math.round(video.videoHeight * scale);
-    // Create hidden canvas for extraction (scaled down for performance)
-    const MAX_INFERENCE_DIM = 640;
-    const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
     const extractWidth = Math.round(video.videoWidth * scale);
     const extractHeight = Math.round(video.videoHeight * scale);
 
@@ -373,12 +375,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                                 y1: box.y1 * scaleY,
                                 x2: box.x2 * scaleX,
                                 y2: box.y2 * scaleY
-                            // Scale coordinates back to original video resolution
-                            const box = {
-                              x1: bestResult.box.x1 / scale,
-                              y1: bestResult.box.y1 / scale,
-                              x2: bestResult.box.x2 / scale,
-                              y2: bestResult.box.y2 / scale
                             };
 
                             newTrajectory.push({
@@ -718,16 +714,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                 src={videoUrl}
                 className="w-full h-full object-contain"
                 onTimeUpdate={handleTimeUpdate}
-                onLoadedMetadata={(e) => {
-                  setDuration(e.currentTarget.duration);
-                  // Trigger canvas resize when video loads
-                  if (canvasRef.current && e.currentTarget.videoWidth) {
-                    canvasRef.current.width = e.currentTarget.videoWidth;
-                    canvasRef.current.height = e.currentTarget.videoHeight;
-                  }
-                  // Update canvas overlay position to match video's rendered area
-                  updateCanvasOverlay();
-                }}
+                onLoadedMetadata={handleVideoLoadedMetadata}
               />
               <canvas
                 ref={canvasRef}
