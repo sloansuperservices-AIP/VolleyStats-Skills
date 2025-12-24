@@ -76,6 +76,14 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const isLiveAnalysisRunning = useRef(false);
+  const courtPointsRef = useRef<Point[]>(courtPoints);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const startTimeRef = useRef<number>(0);
+
+  useEffect(() => {
+    courtPointsRef.current = courtPoints;
+  }, [courtPoints]);
 
   const [canvasStyle, setCanvasStyle] = useState<React.CSSProperties>({});
 
@@ -142,6 +150,16 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
         video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
       });
 
+      // Start Recording
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      startTimeRef.current = Date.now();
+
       streamRef.current = stream;
       setIsLive(true);
       setVideoUrl('live');
@@ -158,6 +176,27 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   const stopLive = () => {
     isLiveAnalysisRunning.current = false;
 
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.onstop = () => {
+         const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+         const file = new File([blob], "live_recording.webm", { type: 'video/webm' });
+         setVideoFile(file);
+         const url = URL.createObjectURL(file);
+         setVideoUrl(url);
+         setIsLive(false);
+         setIsAnalyzing(false);
+         if (videoRef.current) {
+             videoRef.current.srcObject = null;
+             videoRef.current.src = url;
+         }
+      };
+    } else {
+        setIsLive(false);
+        setVideoUrl(null);
+        setIsAnalyzing(false);
+    }
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
@@ -166,10 +205,6 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
-
-    setIsLive(false);
-    setVideoUrl(null);
-    setIsAnalyzing(false);
   };
 
   // Clean up on unmount
@@ -334,7 +369,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
                         y2: box.y2 * scaleY
                     };
 
-                    const time = Date.now() / 1000;
+                    const time = (Date.now() - startTimeRef.current) / 1000;
 
                     const point: TrajectoryPoint = {
                       time: time,
@@ -396,6 +431,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
     const extractWidth = Math.round(video.videoWidth * scale);
     const extractHeight = Math.round(video.videoHeight * scale);
+
     const originalTime = video.currentTime;
     video.pause();
 
@@ -552,6 +588,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   // --- Landing Detection ---
   const detectLandings = (traj: TrajectoryPoint[]) => {
     const landings: Point[] = [];
+    const currentCourtPoints = courtPointsRef.current;
 
     // Heuristic: Local Maxima of Y (lowest visual point on screen = higher Y value in canvas coords)
     // AND must be within court if court is defined (optional, but good for filtering)
@@ -570,8 +607,8 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
 
             // It's a bounce candidate.
             // Check if it's inside the court boundary (if defined)
-            if (courtPoints.length === 2) {
-              if (isPointInRect(curr.center, courtPoints[0], courtPoints[1])) {
+            if (currentCourtPoints.length === 2) {
+              if (isPointInRect(curr.center, currentCourtPoints[0], currentCourtPoints[1])) {
                 landings.push(curr.center);
               }
             } else {

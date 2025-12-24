@@ -124,6 +124,16 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   const streamRef = useRef<MediaStream | null>(null);
   const analysisLoopRef = useRef<number | null>(null);
   const isLiveAnalysisRunning = useRef(false);
+  const rulesRef = useRef<Rule[]>(rules);
+  const zonesRef = useRef<Zone[]>(zones);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const startTimeRef = useRef<number>(0);
+
+  useEffect(() => {
+    rulesRef.current = rules;
+    zonesRef.current = zones;
+  }, [rules, zones]);
 
   // State for canvas overlay positioning (to match video's object-contain rendering)
   const [canvasStyle, setCanvasStyle] = useState<React.CSSProperties>({});
@@ -198,6 +208,16 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
       });
 
+      // Start Recording
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      startTimeRef.current = Date.now();
+
       streamRef.current = stream;
       setIsLive(true);
       setVideoUrl('live'); // Trigger view
@@ -220,6 +240,32 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         analysisLoopRef.current = null;
     }
 
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      // Handle the data
+      // We need to wait a moment for the 'stop' event to fire if we relied on event listener,
+      // but simpler is to handle it here if we assume chunks are pushed?
+      // Actually, 'stop' event is async. Better to set onstop in startLive or here.
+      mediaRecorderRef.current.onstop = () => {
+         const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+         const file = new File([blob], "live_recording.webm", { type: 'video/webm' });
+         setVideoFile(file);
+         const url = URL.createObjectURL(file);
+         setVideoUrl(url);
+         // Do NOT reset state here, so user can see what happened
+         setIsLive(false);
+         setIsAnalyzing(false);
+         if (videoRef.current) {
+             videoRef.current.srcObject = null;
+             videoRef.current.src = url;
+         }
+      };
+    } else {
+        setIsLive(false);
+        setVideoUrl(null);
+        setIsAnalyzing(false);
+    }
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
@@ -228,10 +274,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
-
-    setIsLive(false);
-    setVideoUrl(null);
-    setIsAnalyzing(false);
   };
 
   // Clean up on unmount
@@ -402,10 +444,8 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                         y2: box.y2 * scaleY
                     };
 
-                    const time = Date.now() / 1000; // Unix timestamp or relative? Use relative to session start?
-                    // For live, maybe just use Date.now() or relative to start.
-                    // Let's use relative to start to keep numbers small.
-                    // But for now, just monotonic.
+                    // Use relative time from start of recording to align with video playback later
+                    const time = (Date.now() - startTimeRef.current) / 1000;
 
                     const point: TrajectoryPoint = {
                       time: time,
@@ -638,8 +678,12 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
       const prev = sorted[i-1];
       const curr = sorted[i];
 
-      rules.forEach(rule => {
-        const zone = zones.find(z => z.id === rule.zoneId);
+      // Use refs to get latest rules/zones state during live updates
+      const currentRules = rulesRef.current;
+      const currentZones = zonesRef.current;
+
+      currentRules.forEach(rule => {
+        const zone = currentZones.find(z => z.id === rule.zoneId);
         if (!zone) return;
 
         let triggered = false;
