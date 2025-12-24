@@ -291,9 +291,14 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     const newTrajectory: TrajectoryPoint[] = [];
 
     // Create hidden canvas for extraction
+    // Optimization: Downscale to 640px max dimension to save bandwidth and encoding time
+    // The API expects 640px anyway.
+    const MAX_INFERENCE_DIM = 640;
+    const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
+
     const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = video.videoWidth;
-    hiddenCanvas.height = video.videoHeight;
+    hiddenCanvas.width = Math.round(video.videoWidth * scale);
+    hiddenCanvas.height = Math.round(video.videoHeight * scale);
     const ctx = hiddenCanvas.getContext('2d');
 
     // Store current time to restore later
@@ -325,7 +330,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
             });
 
             if (ctx) {
-                ctx.drawImage(video, 0, 0);
+                ctx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                 // We MUST await the blob creation before moving to the next frame
                 // because the next iteration will overwrite the canvas.
                 const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
@@ -349,12 +354,23 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                           const bestResult = ballDetections[0];
                           if (bestResult) {
                             const box = bestResult.box;
+                            // Scale coordinates back to original video resolution
+                            const scaleX = video.videoWidth / hiddenCanvas.width;
+                            const scaleY = video.videoHeight / hiddenCanvas.height;
+
+                            const scaledBox = {
+                                x1: box.x1 * scaleX,
+                                y1: box.y1 * scaleY,
+                                x2: box.x2 * scaleX,
+                                y2: box.y2 * scaleY
+                            };
+
                             newTrajectory.push({
                               time,
-                              box,
+                              box: scaledBox,
                               center: {
-                                x: (box.x1 + box.x2) / 2,
-                                y: (box.y1 + box.y2) / 2
+                                x: (scaledBox.x1 + scaledBox.x2) / 2,
+                                y: (scaledBox.y1 + scaledBox.y2) / 2
                               },
                               confidence: bestResult.confidence,
                               className: bestResult.name || 'ball'
