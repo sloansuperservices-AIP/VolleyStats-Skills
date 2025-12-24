@@ -232,9 +232,12 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     const MAX_INFERENCE_DIM = 640;
     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
 
+    const extractWidth = Math.round(video.videoWidth * scale);
+    const extractHeight = Math.round(video.videoHeight * scale);
+
     const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = Math.round(video.videoWidth * scale);
-    hiddenCanvas.height = Math.round(video.videoHeight * scale);
+    hiddenCanvas.width = extractWidth;
+    hiddenCanvas.height = extractHeight;
     const ctx = hiddenCanvas.getContext('2d');
     const originalTime = video.currentTime;
     video.pause();
@@ -285,18 +288,6 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
                               time,
                               box: scaledBox,
                               center: { x: (scaledBox.x1 + scaledBox.x2) / 2, y: (scaledBox.y1 + scaledBox.y2) / 2 },
-                            // Scale coordinates back to original video resolution
-                            const box = {
-                              x1: bestResult.box.x1 / scale,
-                              y1: bestResult.box.y1 / scale,
-                              x2: bestResult.box.x2 / scale,
-                              y2: bestResult.box.y2 / scale
-                            };
-
-                            newTrajectory.push({
-                              time,
-                              box,
-                              center: { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 },
                               confidence: bestResult.confidence
                             });
                           }
