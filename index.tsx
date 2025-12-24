@@ -15,7 +15,7 @@ import {
   ArrowLeft,
   Upload,
   Loader2,
-  Trophy
+  Trophy,
   StopCircle
 } from 'lucide-react';
 

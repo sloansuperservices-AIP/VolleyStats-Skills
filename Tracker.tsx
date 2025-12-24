@@ -198,11 +198,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
       });
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
-
       streamRef.current = stream;
       setIsLive(true);
       setVideoUrl('live'); // Trigger view
@@ -245,6 +240,14 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
       stopLive();
     };
   }, []);
+
+  // Initialize live stream when video element becomes available
+  useEffect(() => {
+    if (isLive && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(console.error);
+    }
+  }, [isLive, videoUrl]);
 
   const handleVideoLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const video = e.currentTarget;
@@ -471,17 +474,8 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     // The API expects 640px anyway.
     const MAX_INFERENCE_DIM = 640;
     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
-
-    const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = Math.round(video.videoWidth * scale);
-    hiddenCanvas.height = Math.round(video.videoHeight * scale);
     const extractWidth = Math.round(video.videoWidth * scale);
     const extractHeight = Math.round(video.videoHeight * scale);
-
-    const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = extractWidth;
-    hiddenCanvas.height = extractHeight;
-    const ctx = hiddenCanvas.getContext('2d');
 
     // Store current time to restore later
     const originalTime = video.currentTime;
@@ -538,13 +532,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
                           const bestResult = ballDetections[0];
                           if (bestResult) {
-                            // Scale box back to original video dimensions
-                            const scaleFactor = 1 / scaleRatio;
-                            const box = {
-                              x1: bestResult.box.x1 * scaleFactor,
-                              y1: bestResult.box.y1 * scaleFactor,
-                              x2: bestResult.box.x2 * scaleFactor,
-                              y2: bestResult.box.y2 * scaleFactor
                             const box = bestResult.box;
                             // Scale coordinates back to original video resolution
                             const scaleX = video.videoWidth / extractWidth;

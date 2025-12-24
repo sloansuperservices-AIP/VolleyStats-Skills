@@ -142,11 +142,6 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
         video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
       });
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
-
       streamRef.current = stream;
       setIsLive(true);
       setVideoUrl('live');
@@ -183,6 +178,14 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
       stopLive();
     };
   }, []);
+
+  // Initialize live stream when video element becomes available
+  useEffect(() => {
+    if (isLive && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(console.error);
+    }
+  }, [isLive, videoUrl]);
 
   const togglePlay = () => {
     if (isLive) return;
@@ -393,14 +396,6 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
     const extractWidth = Math.round(video.videoWidth * scale);
     const extractHeight = Math.round(video.videoHeight * scale);
-
-    const extractWidth = Math.round(video.videoWidth * scale);
-    const extractHeight = Math.round(video.videoHeight * scale);
-
-    const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = extractWidth;
-    hiddenCanvas.height = extractHeight;
-    const ctx = hiddenCanvas.getContext('2d');
     const originalTime = video.currentTime;
     video.pause();
 
@@ -437,13 +432,6 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
                           ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
                           const bestResult = ballDetections[0];
                           if (bestResult) {
-                            // Scale box back to original video dimensions
-                            const scaleFactor = 1 / scaleRatio;
-                            const box = {
-                              x1: bestResult.box.x1 * scaleFactor,
-                              y1: bestResult.box.y1 * scaleFactor,
-                              x2: bestResult.box.x2 * scaleFactor,
-                              y2: bestResult.box.y2 * scaleFactor
                             const box = bestResult.box;
                             // Scale coordinates back
                             const scaleX = video.videoWidth / extractWidth;
