@@ -458,6 +458,9 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     const MAX_INFERENCE_DIM = 640;
     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
 
+    const hiddenCanvas = document.createElement('canvas');
+    hiddenCanvas.width = Math.round(video.videoWidth * scale);
+    hiddenCanvas.height = Math.round(video.videoHeight * scale);
     const extractWidth = Math.round(video.videoWidth * scale);
     const extractHeight = Math.round(video.videoHeight * scale);
 
@@ -495,6 +498,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
             });
 
             if (ctx) {
+                ctx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                 ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
                 // We MUST await the blob creation before moving to the next frame
                 // because the next iteration will overwrite the canvas.

@@ -1,25 +1,27 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { 
-  Camera, 
-  Activity, 
-  TrendingUp, 
-  PlayCircle, 
-  CheckCircle, 
-  User, 
-  BarChart2, 
-  ChevronRight, 
-  Zap, 
-  Eye, 
+import {
+  Camera,
+  Activity,
+  TrendingUp,
+  PlayCircle,
+  CheckCircle,
+  User,
+  BarChart2,
+  ChevronRight,
+  Zap,
+  Eye,
   ArrowLeft,
   Upload,
   Loader2,
+  Trophy
   StopCircle
 } from 'lucide-react';
 
 import { Tracker } from './Tracker';
 import { ServingTracker } from './ServingTracker';
+import { MidTNLeaderboard } from './MidTNLeaderboard';
 
 // --- Types ---
 
@@ -98,6 +100,7 @@ const App = () => {
   const [profile, setProfile] = useState<AthleteProfile | null>(null);
   const [activeStation, setActiveStation] = useState<Station | null>(null);
   const [analysisHistory, setAnalysisHistory] = useState<Record<string, AnalysisResult>>({});
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
 
   const handleProfileComplete = (p: AthleteProfile) => setProfile(p);
 
@@ -124,20 +127,23 @@ const App = () => {
       <main className="max-w-md mx-auto px-4 pt-6">
         {!profile ? (
           <Onboarding onComplete={handleProfileComplete} />
+        ) : showLeaderboard ? (
+          <MidTNLeaderboard onBack={() => setShowLeaderboard(false)} />
         ) : !activeStation ? (
-          <Dashboard 
-            profile={profile} 
-            stations={STATIONS} 
+          <Dashboard
+            profile={profile}
+            stations={STATIONS}
             history={analysisHistory}
-            onSelectStation={setActiveStation} 
+            onSelectStation={setActiveStation}
+            onShowLeaderboard={() => setShowLeaderboard(true)}
           />
         ) : activeStation.id === 'tracker' ? (
           <Tracker onBack={() => setActiveStation(null)} />
         ) : activeStation.id === 'serve' ? (
           <ServingTracker onBack={() => setActiveStation(null)} />
         ) : (
-          <StationView 
-            station={activeStation} 
+          <StationView
+            station={activeStation}
             profile={profile}
             onBack={() => setActiveStation(null)}
             onComplete={(result) => {
@@ -222,19 +228,38 @@ const Onboarding = ({ onComplete }: { onComplete: (p: AthleteProfile) => void })
 };
 
 // 2. Dashboard / Station Selection
-const Dashboard = ({ 
-  profile, 
-  stations, 
+const Dashboard = ({
+  profile,
+  stations,
   history,
-  onSelectStation 
-}: { 
-  profile: AthleteProfile, 
-  stations: Station[], 
+  onSelectStation,
+  onShowLeaderboard
+}: {
+  profile: AthleteProfile,
+  stations: Station[],
   history: Record<string, AnalysisResult>,
-  onSelectStation: (s: Station) => void 
+  onSelectStation: (s: Station) => void,
+  onShowLeaderboard: () => void
 }) => {
   return (
     <div className="animate-fade-in space-y-6">
+      {/* MID TN Leaderboard Button */}
+      <button
+        onClick={onShowLeaderboard}
+        className="w-full bg-gradient-to-r from-purple-900/50 to-cyan-900/50 hover:from-purple-900/70 hover:to-cyan-900/70 border border-purple-500/30 rounded-xl p-4 text-left transition-all group"
+      >
+        <div className="flex items-center gap-4">
+          <div className="p-3 rounded-lg bg-purple-500/20 text-purple-400">
+            <Trophy className="w-6 h-6" />
+          </div>
+          <div className="flex-1">
+            <h4 className="font-bold text-white">MID TN Leaderboard</h4>
+            <p className="text-sm text-gray-400 mt-1">View club rankings by skill</p>
+          </div>
+          <ChevronRight className="text-purple-400 group-hover:translate-x-1 transition-transform" />
+        </div>
+      </button>
+
       <div className="bg-[#1a1d24] rounded-xl p-6 border border-gray-800">
         <div className="flex justify-between items-start mb-4">
           <div>
