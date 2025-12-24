@@ -16,6 +16,7 @@ import {
   Upload,
   Loader2,
   Trophy
+  StopCircle
 } from 'lucide-react';
 
 import { Tracker } from './Tracker';
@@ -343,7 +344,12 @@ const StationView = ({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
   // Define schema for structured JSON output
   const resultSchema: Schema = {
@@ -365,6 +371,54 @@ const StationView = ({
       setFile(selectedFile);
       setPreviewUrl(URL.createObjectURL(selectedFile));
       setError(null);
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: false
+      });
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+        const recordedFile = new File([blob], "recorded_video.webm", { type: 'video/webm' });
+        setFile(recordedFile);
+        setPreviewUrl(URL.createObjectURL(recordedFile));
+
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+        if (videoRef.current) videoRef.current.srcObject = null;
+      };
+
+      recorder.start();
+      setMediaRecorder(recorder);
+      setIsRecording(true);
+      setPreviewUrl('recording'); // Use placeholder to show video element
+
+    } catch (err) {
+      console.error("Error accessing camera:", err);
+      setError("Could not access camera. Please check permissions.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+      setIsRecording(false);
     }
   };
 
@@ -462,28 +516,50 @@ const StationView = ({
 
         {previewUrl ? (
           <div className="w-full h-full flex flex-col items-center">
-            <video 
-              src={previewUrl} 
-              className="max-h-[50vh] w-full object-contain rounded-lg bg-black mb-4" 
-              controls 
-              playsInline
-            />
+            <div className="relative w-full max-h-[50vh] bg-black rounded-lg mb-4 flex items-center justify-center overflow-hidden">
+                <video
+                  ref={videoRef}
+                  src={previewUrl !== 'recording' ? previewUrl : undefined}
+                  className="max-h-[50vh] w-full object-contain"
+                  controls={!isRecording}
+                  playsInline
+                  muted={isRecording}
+                />
+                {isRecording && (
+                    <div className="absolute top-4 right-4 animate-pulse flex items-center gap-2 bg-red-600/80 px-3 py-1 rounded-full">
+                        <div className="w-2 h-2 bg-white rounded-full" />
+                        <span className="text-white text-xs font-bold">REC</span>
+                    </div>
+                )}
+            </div>
+
             <div className="flex gap-4 w-full">
-              <button 
-                onClick={() => {
-                  setFile(null);
-                  setPreviewUrl(null);
-                }}
-                className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg font-semibold text-white transition-colors"
-              >
-                Retake
-              </button>
-              <button 
-                onClick={runAnalysis}
-                className="flex-1 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-lg font-bold text-white shadow-lg shadow-cyan-900/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
-              >
-                <Zap className="w-4 h-4 fill-white" /> Analyze Form
-              </button>
+              {isRecording ? (
+                  <button
+                    onClick={stopRecording}
+                    className="flex-1 py-3 bg-red-600 hover:bg-red-500 rounded-lg font-bold text-white transition-colors flex items-center justify-center gap-2"
+                  >
+                    <StopCircle className="w-5 h-5" /> Stop Recording
+                  </button>
+              ) : (
+                  <>
+                      <button
+                        onClick={() => {
+                          setFile(null);
+                          setPreviewUrl(null);
+                        }}
+                        className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg font-semibold text-white transition-colors"
+                      >
+                        Retake
+                      </button>
+                      <button
+                        onClick={runAnalysis}
+                        className="flex-1 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-lg font-bold text-white shadow-lg shadow-cyan-900/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                      >
+                        <Zap className="w-4 h-4 fill-white" /> Analyze Form
+                      </button>
+                  </>
+              )}
             </div>
           </div>
         ) : (
@@ -502,12 +578,21 @@ const StationView = ({
               className="hidden"
               onChange={handleFileChange}
             />
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-3 w-full max-w-xs mx-auto">
               <button 
                 onClick={() => fileInputRef.current?.click()}
                 className="bg-white text-black font-bold py-3 px-8 rounded-lg hover:bg-gray-100 transition-colors flex items-center justify-center gap-2"
               >
                 <Upload className="w-5 h-5" /> Select Video
+              </button>
+
+               <div className="text-gray-600 font-bold my-1">- OR -</div>
+
+               <button
+                onClick={startRecording}
+                className="bg-red-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-red-500 transition-colors flex items-center justify-center gap-2"
+              >
+                <Camera className="w-5 h-5" /> Record Video
               </button>
             </div>
           </div>
