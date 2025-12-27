@@ -86,6 +86,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const startTimeRef = useRef<number>(0);
+  const hiddenCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     rulesRef.current = rules;
@@ -351,64 +352,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   const analyzeLiveStream = async () => {
      if (!videoRef.current || !isLiveAnalysisRunning.current) return;
 
-     const video = videoRef.current;
-     if (video.readyState < 2) {
-        requestAnimationFrame(analyzeLiveStream);
-        return;
-     }
-
-     const startTime = Date.now();
-
-     // Extract frame
-     const MAX_INFERENCE_DIM = 640;
-     const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
-     const extractWidth = Math.round(video.videoWidth * scale);
-     const extractHeight = Math.round(video.videoHeight * scale);
-
-     const hiddenCanvas = document.createElement('canvas');
-     hiddenCanvas.width = extractWidth;
-     hiddenCanvas.height = extractHeight;
-     const ctx = hiddenCanvas.getContext('2d');
-
-     if (ctx) {
-         ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
-         const blob = await new Promise<Blob | null>(res => hiddenCanvas.toBlob(res, 'image/jpeg', 0.8));
-
-         if (blob && isLiveAnalysisRunning.current) {
-             const result = await fetchInference(blob);
-
-             if (result && result.images && result.images[0] && result.images[0].results) {
-                 // Process results similar to analyzeVideo
-                  const ballDetections = result.images[0].results.filter((r: any) =>
-                    r.name === 'volleyball' ||
-                    r.name === 'sports ball' ||
-                    r.name === 'ball' ||
-                    r.class === 0 ||
-                    r.class === 32
-                  );
-                  ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
-
-                  const bestResult = ballDetections[0];
-                  if (bestResult) {
-                    const box = bestResult.box;
-                    // Scale coordinates back to original video resolution
-                    const scaleX = video.videoWidth / extractWidth;
-                    const scaleY = video.videoHeight / extractHeight;
-
-                    const scaledBox = {
-                        x1: box.x1 * scaleX,
-                        y1: box.y1 * scaleY,
-                        x2: box.x2 * scaleX,
-                        y2: box.y2 * scaleY
-                    };
-
-                    // Use relative time from start of recording to align with video playback later
-                    const time = (Date.now() - startTimeRef.current) / 1000;
-
-                    const point: TrajectoryPoint = {
-                      time: time,
-                      box: scaledBox,
-                      center: {
      // Throttling: 10 FPS = 100ms interval
      const now = Date.now();
      if (now - lastFrameTimeRef.current < 100) {
@@ -417,11 +360,26 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
      }
      lastFrameTimeRef.current = now;
 
+     const video = videoRef.current;
+     if (video.readyState < 2) {
+        requestAnimationFrame(analyzeLiveStream);
+        return;
+     }
+
      const scaleRatio = calculateScalingRatio(video.videoWidth, video.videoHeight);
      const extractWidth = Math.round(video.videoWidth * scaleRatio);
      const extractHeight = Math.round(video.videoHeight * scaleRatio);
 
-     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight);
+     // Reuse hidden canvas
+     if (!hiddenCanvasRef.current) {
+         hiddenCanvasRef.current = document.createElement('canvas');
+     }
+     const hiddenCanvas = hiddenCanvasRef.current;
+     const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
+
+     if (!ctx) return;
+
+     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, ctx);
 
      if (blob && isLiveAnalysisRunning.current) {
          const result = await fetchInference(blob);
@@ -453,7 +411,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                     y2: box.y2 * scaleY
                 };
 
-                const time = Date.now() / 1000;
+                const time = (Date.now() - startTimeRef.current) / 1000;
 
                 const point: TrajectoryPoint = {
                     time: time,
@@ -507,9 +465,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     hiddenCanvas.height = extractHeight;
     const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
 
-    // Use workWidth/workHeight as extract dimensions
-    const extractWidth = workWidth;
-    const extractHeight = workHeight;
 
     // Store current time to restore later
     const originalTime = video.currentTime;
@@ -704,8 +659,10 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
     // Match canvas internal resolution to video source
     if (video.videoWidth && video.videoHeight) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
     }
 
     const ctx = canvas.getContext('2d');
