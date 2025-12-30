@@ -81,6 +81,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const startTimeRef = useRef<number>(0);
+  const processingCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     courtPointsRef.current = courtPoints;
@@ -319,10 +320,15 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
      const extractWidth = Math.round(video.videoWidth * scale);
      const extractHeight = Math.round(video.videoHeight * scale);
 
-     const hiddenCanvas = document.createElement('canvas');
-     hiddenCanvas.width = extractWidth;
-     hiddenCanvas.height = extractHeight;
-     const ctx = hiddenCanvas.getContext('2d');
+     // Optimization: Reuse canvas to avoid garbage collection and overhead
+     if (!processingCanvasRef.current) {
+         processingCanvasRef.current = document.createElement('canvas');
+     }
+     const hiddenCanvas = processingCanvasRef.current;
+     if (hiddenCanvas.width !== extractWidth) hiddenCanvas.width = extractWidth;
+     if (hiddenCanvas.height !== extractHeight) hiddenCanvas.height = extractHeight;
+
+     const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
 
      if (ctx) {
          ctx.drawImage(video, 0, 0, extractWidth, extractHeight);
@@ -331,8 +337,8 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
          if (blob && isLiveAnalysisRunning.current) {
              const result = await fetchInference(blob);
 
-             if (result && result.images && result.images[0] && result.images[0].results) {
-                  const ballDetections = result.images[0].results.filter((r: any) =>
+             if (result && result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
+                  const ballDetections = result.data.images[0].results.filter((r: any) =>
                     r.name === 'volleyball' ||
                     r.name === 'sports ball' ||
                     r.name === 'ball' ||
@@ -373,74 +379,26 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
                        return newT;
                     });
                   }
+             } else if (result === null) {
+                 setModelStatus('error');
              }
-      // Throttling: 10 FPS = 100ms interval
-     const now = Date.now();
-     if (now - lastFrameTimeRef.current < 100) {
-        requestAnimationFrame(analyzeLiveStream);
-        return;
-     }
-     lastFrameTimeRef.current = now;
-
-     const scaleRatio = calculateScalingRatio(video.videoWidth, video.videoHeight);
-     const extractWidth = Math.round(video.videoWidth * scaleRatio);
-     const extractHeight = Math.round(video.videoHeight * scaleRatio);
-
-     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight);
-
-     if (blob && isLiveAnalysisRunning.current) {
-         const result = await fetchInference(blob);
-
-         if (result && result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
-              setLastInferenceTime(result.inferenceTime);
-              const ballDetections = result.data.images[0].results.filter((r: any) =>
-                r.name === 'volleyball' ||
-                r.name === 'sports ball' ||
-                r.name === 'ball' ||
-                r.class === 0 ||
-                r.class === 32
-              );
-              ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
-
-              const bestResult = ballDetections[0];
-              if (bestResult) {
-                const box = bestResult.box;
-                const scaleX = video.videoWidth / extractWidth;
-                const scaleY = video.videoHeight / extractHeight;
-
-                const scaledBox = {
-                    x1: box.x1 * scaleX,
-                    y1: box.y1 * scaleY,
-                    x2: box.x2 * scaleX,
-                    y2: box.y2 * scaleY
-                };
-
-                const time = Date.now() / 1000;
-
-                const point: TrajectoryPoint = {
-                  time: time,
-                  box: scaledBox,
-                  center: {
-                    x: (scaledBox.x1 + scaledBox.x2) / 2,
-                    y: (scaledBox.y1 + scaledBox.y2) / 2
-                  },
-                  confidence: bestResult.confidence,
-                  className: bestResult.name || 'ball'
-                };
-
-                setTrajectory(prev => {
-                   const newT = [...prev, point];
-                   detectLandings(newT); // Update landings in real-time
-                   return newT;
-                });
-              }
-         } else if (result === null) {
-             setModelStatus('error');
          }
      }
 
+     // Throttling: 10 FPS = 100ms interval
+     const now = Date.now();
+     const elapsed = now - lastFrameTimeRef.current;
+
      if (isLiveAnalysisRunning.current) {
-        requestAnimationFrame(analyzeLiveStream);
+        if (elapsed < 100) {
+            // Wait for remaining time
+            setTimeout(() => {
+                requestAnimationFrame(analyzeLiveStream);
+            }, 100 - elapsed);
+        } else {
+            lastFrameTimeRef.current = now;
+            requestAnimationFrame(analyzeLiveStream);
+        }
      }
   };
 
@@ -468,11 +426,6 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     hiddenCanvas.width = extractWidth;
     hiddenCanvas.height = extractHeight;
     const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
-    // Optimization: Downscale to 640px max dimension
-    const MAX_INFERENCE_DIM = 640;
-    const scale = Math.min(1, MAX_INFERENCE_DIM / Math.max(video.videoWidth, video.videoHeight));
-    const extractWidth = Math.round(video.videoWidth * scale);
-    const extractHeight = Math.round(video.videoHeight * scale);
 
     if (!ctx) return;
 
