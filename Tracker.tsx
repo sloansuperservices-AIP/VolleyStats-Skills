@@ -361,13 +361,8 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         return;
      }
 
-     // Throttling: 10 FPS = 100ms interval
-     const now = Date.now();
-     if (now - lastFrameTimeRef.current < 100) {
-        requestAnimationFrame(analyzeLiveStream);
-        return;
-     }
-     lastFrameTimeRef.current = now;
+     const startTime = Date.now();
+     lastFrameTimeRef.current = startTime;
 
      const scaleRatio = calculateScalingRatio(video.videoWidth, video.videoHeight);
      const extractWidth = Math.round(video.videoWidth * scaleRatio);
@@ -431,7 +426,13 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
      }
 
      if (isLiveAnalysisRunning.current) {
-        requestAnimationFrame(analyzeLiveStream);
+        const elapsed = Date.now() - startTime;
+        const delay = Math.max(0, 100 - elapsed);
+        setTimeout(() => {
+           if (isLiveAnalysisRunning.current) {
+              requestAnimationFrame(analyzeLiveStream);
+           }
+        }, delay);
      }
   };
 
