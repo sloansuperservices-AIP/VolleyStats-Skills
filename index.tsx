@@ -446,14 +446,6 @@ const StationView = ({
         reader.readAsDataURL(file);
       });
 
-      const model = ai.models.getGenerativeModel({
-        model: 'gemini-2.5-flash',
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: resultSchema,
-        }
-      });
-
       const fullPrompt = `
         You are an expert Volleyball Scout and Biomechanics Analyst.
         Athlete Profile: ${profile.name}, ${profile.heightCm}cm tall, Position: ${profile.position}.
@@ -464,19 +456,24 @@ const StationView = ({
         Be critical but constructive. Use the athlete's height as a reference for spatial measurements.
       `;
 
-      const result = await model.generateContent({
+      const result = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: resultSchema,
+        },
         contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: fullPrompt },
-              { inlineData: { mimeType: file.type, data: base64Data } }
-            ]
-          }
+            {
+                role: 'user',
+                parts: [
+                    { text: fullPrompt },
+                    { inlineData: { mimeType: file.type, data: base64Data } }
+                ]
+            }
         ]
       });
 
-      const responseText = result.response.text();
+      const responseText = result.text;
       const analysisData = JSON.parse(responseText) as AnalysisResult;
       onComplete(analysisData);
 

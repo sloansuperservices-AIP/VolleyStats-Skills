@@ -81,6 +81,8 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   const streamRef = useRef<MediaStream | null>(null);
   const analysisLoopRef = useRef<number | null>(null);
   const isLiveAnalysisRunning = useRef(false);
+  // Reusable canvas for live frame extraction to prevent GC pressure
+  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rulesRef = useRef<Rule[]>(rules);
   const zonesRef = useRef<Zone[]>(zones);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -373,7 +375,14 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
      const extractWidth = Math.round(video.videoWidth * scaleRatio);
      const extractHeight = Math.round(video.videoHeight * scaleRatio);
 
-     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight);
+     // Initialize offscreen canvas if needed
+     if (!offscreenCanvasRef.current) {
+         offscreenCanvasRef.current = document.createElement('canvas');
+     }
+     const ctx = offscreenCanvasRef.current.getContext('2d', { willReadFrequently: true });
+
+     // Reuse context for frame extraction to avoid creating new canvas/context per frame
+     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, ctx || undefined);
 
      if (blob && isLiveAnalysisRunning.current) {
          const result = await fetchInference(blob);
