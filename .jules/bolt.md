@@ -1,0 +1,3 @@
+## 2024-05-24 - Reusing Canvas Context for Live Video Processing
+**Learning:** In `Tracker.tsx` and `ServingTracker.tsx`, the `analyzeLiveStream` function was calling `extractFrameFromVideo` without passing an existing `CanvasRenderingContext2D`. This caused `extractFrameFromVideo` to create a new `<canvas>` element (and context) 10 times per second (10 FPS throttling), leading to unnecessary memory churn and garbage collection pressure.
+**Action:** Always create a persistent `useRef<CanvasRenderingContext2D>` for video processing loops and pass it to `extractFrameFromVideo` to reuse the same offscreen canvas.
