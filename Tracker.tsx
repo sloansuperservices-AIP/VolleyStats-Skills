@@ -86,6 +86,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const startTimeRef = useRef<number>(0);
+  const hiddenCtxRef = useRef<CanvasRenderingContext2D | null>(null);
 
   useEffect(() => {
     rulesRef.current = rules;
@@ -373,7 +374,12 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
      const extractWidth = Math.round(video.videoWidth * scaleRatio);
      const extractHeight = Math.round(video.videoHeight * scaleRatio);
 
-     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight);
+     if (!hiddenCtxRef.current) {
+        const offscreen = document.createElement('canvas');
+        hiddenCtxRef.current = offscreen.getContext('2d', { willReadFrequently: true });
+     }
+
+     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, hiddenCtxRef.current || undefined);
 
      if (blob && isLiveAnalysisRunning.current) {
          const result = await fetchInference(blob);
