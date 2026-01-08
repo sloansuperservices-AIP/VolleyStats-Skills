@@ -653,13 +653,17 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
     // Match canvas internal resolution to video source
     if (video.videoWidth && video.videoHeight) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      // Optimization: Only update dimensions if they changed to prevent clearing the context
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
     }
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Must explicitly clear because we are no longer resetting width/height every frame
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     drawZones(ctx, zones);
