@@ -77,6 +77,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const isLiveAnalysisRunning = useRef(false);
+  const liveAnalysisCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const courtPointsRef = useRef<Point[]>(courtPoints);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -325,7 +326,14 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
      const extractWidth = Math.round(video.videoWidth * scaleRatio);
      const extractHeight = Math.round(video.videoHeight * scaleRatio);
 
-     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight);
+     // Optimization: Reuse context for live analysis to prevent GC pressure
+     if (!liveAnalysisCtxRef.current) {
+       const canvas = document.createElement('canvas');
+       // Dimensions will be updated in extractFrameFromVideo
+       liveAnalysisCtxRef.current = canvas.getContext('2d', { willReadFrequently: true });
+     }
+
+     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, liveAnalysisCtxRef.current || undefined);
 
      if (blob && isLiveAnalysisRunning.current) {
          const result = await fetchInference(blob);
