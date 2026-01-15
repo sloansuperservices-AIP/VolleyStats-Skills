@@ -80,6 +80,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const analysisLoopRef = useRef<number | null>(null);
+  const inferenceCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const isLiveAnalysisRunning = useRef(false);
   const rulesRef = useRef<Rule[]>(rules);
   const zonesRef = useRef<Zone[]>(zones);
@@ -373,7 +374,15 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
      const extractWidth = Math.round(video.videoWidth * scaleRatio);
      const extractHeight = Math.round(video.videoHeight * scaleRatio);
 
-     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight);
+     // Initialize shared context if needed
+     if (!inferenceCtxRef.current) {
+        const canvas = document.createElement('canvas');
+        canvas.width = extractWidth;
+        canvas.height = extractHeight;
+        inferenceCtxRef.current = canvas.getContext('2d', { willReadFrequently: true });
+     }
+
+     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, inferenceCtxRef.current!);
 
      if (blob && isLiveAnalysisRunning.current) {
          const result = await fetchInference(blob);
