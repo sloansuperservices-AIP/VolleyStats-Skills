@@ -71,13 +71,27 @@ export const drawTrajectory = (
     });
     ctx.stroke();
 
-    // Draw trajectory points as small circles
-    trajectory.forEach((t, i) => {
-    ctx.beginPath();
-    ctx.fillStyle = i === trajectory.length - 1 ? '#ff00ff' : '#ffff0080';
-    ctx.arc(t.center.x, t.center.y, 6, 0, Math.PI * 2);
-    ctx.fill();
-    });
+    // Draw trajectory points as small circles (Batched for performance)
+    if (trajectory.length > 0) {
+      // 1. Batch draw all historical points (Yellow)
+      if (trajectory.length > 1) {
+        ctx.beginPath();
+        ctx.fillStyle = '#ffff0080';
+        for (let i = 0; i < trajectory.length - 1; i++) {
+          const t = trajectory[i];
+          ctx.moveTo(t.center.x + 6, t.center.y);
+          ctx.arc(t.center.x, t.center.y, 6, 0, Math.PI * 2);
+        }
+        ctx.fill();
+      }
+
+      // 2. Draw the latest point (Magenta)
+      const lastT = trajectory[trajectory.length - 1];
+      ctx.beginPath();
+      ctx.fillStyle = '#ff00ff';
+      ctx.arc(lastT.center.x, lastT.center.y, 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     // Draw current ball position if near current time (or last point if live)
     let currentPoint: TrajectoryPoint | undefined | null = null;
@@ -136,14 +150,22 @@ export const drawTrajectory = (
     }
 
     // Draw all detection points as small indicators (dimmed if not current)
+    // Batched for performance
     if (!isLive) {
+        ctx.beginPath();
+        ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
+        let hasPoints = false;
+
         trajectory.forEach((t) => {
-        if (Math.abs(t.time - currentTime) > 0.3) {
-            ctx.beginPath();
-            ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
-            ctx.arc(t.center.x, t.center.y, 4, 0, Math.PI * 2);
-            ctx.fill();
-        }
+          if (Math.abs(t.time - currentTime) > 0.3) {
+             ctx.moveTo(t.center.x + 4, t.center.y);
+             ctx.arc(t.center.x, t.center.y, 4, 0, Math.PI * 2);
+             hasPoints = true;
+          }
         });
+
+        if (hasPoints) {
+           ctx.fill();
+        }
     }
 }
