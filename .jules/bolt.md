@@ -1,0 +1,3 @@
+## 2024-05-22 - Canvas Context Reuse & Readback Optimization
+**Learning:** In high-frequency video analysis loops (e.g., 10 FPS), creating a new `<canvas>` and 2D context for every frame generates significant Garbage Collection pressure and overhead. Furthermore, when using `ctx.toBlob()` (or `getImageData`) frequently, failing to set `{ willReadFrequently: true }` on `getContext` forces the browser to perform expensive GPU-to-CPU readbacks without optimization.
+**Action:** Always reuse a single `CanvasRenderingContext2D` instance for repetitive frame extraction tasks using `useRef`. Always apply `{ willReadFrequently: true }` when the context is primarily used for reading pixel data.
