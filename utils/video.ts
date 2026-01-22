@@ -15,7 +15,8 @@ export const extractFrameFromVideo = async (
      const canvas = document.createElement('canvas');
      canvas.width = targetWidth;
      canvas.height = targetHeight;
-     ctx = canvas.getContext('2d')!;
+     // Optimization: willReadFrequently forces software rendering or optimal memory layout for frequent readbacks (toBlob)
+     ctx = canvas.getContext('2d', { willReadFrequently: true })!;
   }
 
   // Ensure canvas matches target dimensions if reused
