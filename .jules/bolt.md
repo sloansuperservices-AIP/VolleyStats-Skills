@@ -1,0 +1,3 @@
+## 2024-05-22 - Canvas Redraw Optimization
+**Learning:** React `useEffect` hooks that manage canvas drawing often run on every frame (e.g., when `currentTime` updates). If these hooks unconditionally set `canvas.width` and `canvas.height` to match the video, they force the browser to clear the canvas and re-initialize the context on every frame, causing significant layout thrashing and painting overhead.
+**Action:** Always wrap canvas dimension updates in a conditional check (e.g., `if (canvas.width !== video.videoWidth)`) to only trigger resize/clear when actual dimensions change. Ensure explicit `ctx.clearRect` is used if the implicit clear from resizing is removed.

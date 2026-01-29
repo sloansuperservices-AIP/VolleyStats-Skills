@@ -633,8 +633,11 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     if (!canvas || !video) return;
 
     if (video.videoWidth) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      // PERF: Only update dimensions if they change to avoid unnecessary canvas clearing and relayout
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
     }
 
     const ctx = canvas.getContext('2d');
