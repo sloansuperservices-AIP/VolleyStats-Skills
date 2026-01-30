@@ -1,0 +1,3 @@
+## 2024-05-24 - Canvas Context Reuse in Live Analysis
+**Learning:** In high-frequency loops (like `requestAnimationFrame` running at 10FPS+), creating new `HTMLCanvasElement` and `CanvasRenderingContext2D` instances for every frame causes significant Garbage Collection (GC) pressure and DOM manipulation overhead.
+**Action:** Always use a persistent `useRef` to store a reusable `canvas` or `ctx` (lazily initialized) and pass it to utility functions like `extractFrameFromVideo`. Ensure the utility function handles resizing the canvas if the input dimensions change. Use `{ willReadFrequently: true }` when the canvas is primarily used for `getImageData` or `toBlob` operations.
