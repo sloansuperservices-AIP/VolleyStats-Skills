@@ -653,8 +653,11 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
     // Match canvas internal resolution to video source
     if (video.videoWidth && video.videoHeight) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      // Only resize if dimensions mismatch to prevent expensive context reset
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
     }
 
     const ctx = canvas.getContext('2d');
