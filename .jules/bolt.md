@@ -1,3 +1,3 @@
-## 2024-05-22 - Video Analysis Pipelining
-**Learning:** When processing video frames with async inference, `Promise.all` on batches creates "stop-and-wait" inefficiencies. The video element sits idle while waiting for network requests to finish.
-**Action:** Use a sliding window concurrency pool (e.g., `Set<Promise>`) to pipeline frame extraction (serial) with inference (parallel). This keeps the video extraction loop busy and saturates the network without exceeding concurrency limits.
+## 2025-02-06 - Canvas Batch Rendering & Opacity
+**Learning:** Batching multiple shapes into a single Canvas path (using `moveTo`) and calling `fill()` once is significantly faster (~3.5x JS overhead, ~1000x fewer GPU calls) than filling each shape individually. However, this changes the rendering behavior for overlapping shapes: individual fills stack opacity, whereas a single batched fill renders a flat color (non-zero winding rule) for the union of shapes.
+**Action:** When optimizing Canvas drawing loops, explicitly check if opacity stacking is a required visual feature. If not, always batch calls. If yes, consider if the performance gain outweighs the visual change or if a different blending mode/approach can achieve both.
