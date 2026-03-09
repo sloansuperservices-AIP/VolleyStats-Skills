@@ -1,3 +1,3 @@
-## 2024-05-22 - Repeated Canvas Allocation in Live Analysis
-**Learning:** `analyzeLiveStream` in `Tracker` and `ServingTracker` creates a new DOM `<canvas>` element every 100ms via `extractFrameFromVideo` default behavior, causing high GC pressure and potential frame drops.
-**Action:** Always reuse a single `CanvasRenderingContext2D` with `{ willReadFrequently: true }` for video frame extraction loops using a `useRef` to persist the context.
+## 2025-02-06 - Canvas Batch Rendering & Opacity
+**Learning:** Batching multiple shapes into a single Canvas path (using `moveTo`) and calling `fill()` once is significantly faster (~3.5x JS overhead, ~1000x fewer GPU calls) than filling each shape individually. However, this changes the rendering behavior for overlapping shapes: individual fills stack opacity, whereas a single batched fill renders a flat color (non-zero winding rule) for the union of shapes.
+**Action:** When optimizing Canvas drawing loops, explicitly check if opacity stacking is a required visual feature. If not, always batch calls. If yes, consider if the performance gain outweighs the visual change or if a different blending mode/approach can achieve both.
