@@ -77,6 +77,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const isLiveAnalysisRunning = useRef(false);
+  const analysisCanvasRef = useRef<CanvasRenderingContext2D | null>(null);
   const courtPointsRef = useRef<Point[]>(courtPoints);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -325,7 +326,14 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
      const extractWidth = Math.round(video.videoWidth * scaleRatio);
      const extractHeight = Math.round(video.videoHeight * scaleRatio);
 
-     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight);
+     if (!analysisCanvasRef.current) {
+        const canvas = document.createElement('canvas');
+        canvas.width = extractWidth;
+        canvas.height = extractHeight;
+        analysisCanvasRef.current = canvas.getContext('2d', { willReadFrequently: true });
+     }
+
+     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, analysisCanvasRef.current || undefined);
 
      if (blob && isLiveAnalysisRunning.current) {
          const result = await fetchInference(blob);
@@ -417,64 +425,71 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     video.pause();
 
     try {
-      const BATCH_SIZE = 3;
-      for (let i = 0; i <= totalSteps; i += BATCH_SIZE) {
-         const batchPromises = [];
-         for (let j = 0; j < BATCH_SIZE && (i + j) <= totalSteps; j++) {
-            const stepIndex = i + j;
-            const time = stepIndex * interval;
+      const CONCURRENCY_LIMIT = 3;
+      const processingPromises = new Set<Promise<void>>();
 
-            video.currentTime = time;
-            await new Promise(r => {
-              const onSeek = () => {
-                video.removeEventListener('seeked', onSeek);
-                r(null);
-              };
-              video.addEventListener('seeked', onSeek);
-            });
-
-            // Reuse context and extract frame
-            const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, ctx);
-
-            const task = new Promise<void>(async (resolve) => {
-                if (blob) {
-                   const result = await fetchInference(blob);
-                    if (result && result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
-                      setLastInferenceTime(result.inferenceTime);
-                      const ballDetections = result.data.images[0].results.filter((r: any) =>
-                        r.name === 'volleyball' || r.name === 'sports ball' || r.name === 'ball' || r.class === 0 || r.class === 32
-                      );
-                      ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
-                      const bestResult = ballDetections[0];
-                      if (bestResult) {
-                        const box = bestResult.box;
-                        // Scale coordinates back
-                        const scaleX = video.videoWidth / extractWidth;
-                        const scaleY = video.videoHeight / extractHeight;
-                        const scaledBox = {
-                            x1: box.x1 * scaleX,
-                            y1: box.y1 * scaleY,
-                            x2: box.x2 * scaleX,
-                            y2: box.y2 * scaleY
-                        };
-                        newTrajectory.push({
-                          time,
-                          box: scaledBox,
-                          center: { x: (scaledBox.x1 + scaledBox.x2) / 2, y: (scaledBox.y1 + scaledBox.y2) / 2 },
-                          confidence: bestResult.confidence
-                        });
-                      }
-                    } else if (result === null) {
-                         setModelStatus('error');
-                    }
-                }
-                resolve();
-            });
-            batchPromises.push(task);
+      for (let i = 0; i <= totalSteps; i++) {
+         while (processingPromises.size >= CONCURRENCY_LIMIT) {
+             await Promise.race(processingPromises);
          }
-         await Promise.all(batchPromises);
-         setAnalysisProgress(Math.round(((i + BATCH_SIZE) / totalSteps) * 100));
+
+         const time = i * interval;
+
+         video.currentTime = time;
+         await new Promise(r => {
+           const onSeek = () => {
+             video.removeEventListener('seeked', onSeek);
+             r(null);
+           };
+           video.addEventListener('seeked', onSeek);
+         });
+
+         // Reuse context and extract frame
+         const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, ctx);
+
+         const task = (async () => {
+             if (blob) {
+                const result = await fetchInference(blob);
+                 if (result && result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
+                   setLastInferenceTime(result.inferenceTime);
+                   const ballDetections = result.data.images[0].results.filter((r: any) =>
+                     r.name === 'volleyball' || r.name === 'sports ball' || r.name === 'ball' || r.class === 0 || r.class === 32
+                   );
+                   ballDetections.sort((a: any, b: any) => b.confidence - a.confidence);
+                   const bestResult = ballDetections[0];
+                   if (bestResult) {
+                     const box = bestResult.box;
+                     // Scale coordinates back
+                     const scaleX = video.videoWidth / extractWidth;
+                     const scaleY = video.videoHeight / extractHeight;
+                     const scaledBox = {
+                         x1: box.x1 * scaleX,
+                         y1: box.y1 * scaleY,
+                         x2: box.x2 * scaleX,
+                         y2: box.y2 * scaleY
+                     };
+                     newTrajectory.push({
+                       time,
+                       box: scaledBox,
+                       center: { x: (scaledBox.x1 + scaledBox.x2) / 2, y: (scaledBox.y1 + scaledBox.y2) / 2 },
+                       confidence: bestResult.confidence
+                     });
+                   }
+                 } else if (result === null) {
+                      setModelStatus('error');
+                 }
+             }
+         })();
+
+         const promise = task.then(() => {
+             processingPromises.delete(promise);
+         });
+         processingPromises.add(promise);
+
+         setAnalysisProgress(Math.round((i / totalSteps) * 100));
       }
+
+      await Promise.all(processingPromises);
     } catch (e) {
       console.error("Analysis failed", e);
       setModelStatus('error');

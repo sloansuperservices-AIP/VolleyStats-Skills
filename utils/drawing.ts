@@ -95,6 +95,26 @@ export const drawTrajectory = (
       ctx.moveTo(t.center.x + 6, t.center.y);
       ctx.arc(t.center.x, t.center.y, 6, 0, Math.PI * 2);
       ctx.fill();
+    // Optimized: Batch drawing calls
+    if (trajectory.length > 0) {
+        // Draw historic points (yellow)
+        if (trajectory.length > 1) {
+            ctx.beginPath();
+            ctx.fillStyle = '#ffff0080';
+            for (let i = 0; i < trajectory.length - 1; i++) {
+                const t = trajectory[i];
+                ctx.moveTo(t.center.x + 6, t.center.y);
+                ctx.arc(t.center.x, t.center.y, 6, 0, Math.PI * 2);
+            }
+            ctx.fill();
+        }
+
+        // Draw last point (magenta)
+        const lastT = trajectory[trajectory.length - 1];
+        ctx.beginPath();
+        ctx.fillStyle = '#ff00ff';
+        ctx.arc(lastT.center.x, lastT.center.y, 6, 0, Math.PI * 2);
+        ctx.fill();
     }
 
     // Draw current ball position if near current time (or last point if live)
@@ -166,5 +186,8 @@ export const drawTrajectory = (
             }
         });
         if (hasPoints) ctx.fill();
+        if (hasPoints) {
+            ctx.fill();
+        }
     }
 }
