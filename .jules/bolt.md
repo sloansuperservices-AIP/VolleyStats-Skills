@@ -1,3 +1,9 @@
 ## 2024-05-23 - Unused Optimization Parameters
 **Learning:** Utility functions often already support optimization (e.g., optional buffer/context arguments) that are ignored by consumer code, leading to unnecessary allocations in hot loops.
 **Action:** Always inspect the signature of utility functions in performance-critical loops to check for existing reuse mechanisms before rewriting them.
+## 2024-05-22 - Canvas Performance Optimization
+**Learning:** `CanvasRenderingContext2D.fill()` is a rasterization operation and is significantly more expensive than path construction. In loops drawing many shapes (like trajectory points), calling `fill()` for every point (O(N)) causes massive overhead.
+**Action:** Batch shapes of the same style into a single path using `ctx.moveTo()` to separate subpaths (e.g. for circles), then call `fill()` once (O(1)). This reduced fill calls from ~2000 to ~4 for a 1000-point trajectory.
+## 2025-02-06 - Canvas Batch Rendering & Opacity
+**Learning:** Batching multiple shapes into a single Canvas path (using `moveTo`) and calling `fill()` once is significantly faster (~3.5x JS overhead, ~1000x fewer GPU calls) than filling each shape individually. However, this changes the rendering behavior for overlapping shapes: individual fills stack opacity, whereas a single batched fill renders a flat color (non-zero winding rule) for the union of shapes.
+**Action:** When optimizing Canvas drawing loops, explicitly check if opacity stacking is a required visual feature. If not, always batch calls. If yes, consider if the performance gain outweighs the visual change or if a different blending mode/approach can achieve both.
