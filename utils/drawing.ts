@@ -1,4 +1,4 @@
-import { Point, getDistance } from './math';
+import { Point, getDistance, findFirstIndexGreaterOrEqual } from './math';
 
 export interface TrajectoryPoint {
   time: number;
@@ -57,28 +57,26 @@ export const drawTrajectory = (
   currentTime: number,
   isLive: boolean
 ) => {
-    if (trajectory.length === 0) return;
+  if (trajectory.length === 0) return;
 
-    // Draw trajectory path
-    ctx.beginPath();
-    ctx.strokeStyle = '#ffff00';
-    ctx.lineWidth = 4;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    trajectory.forEach((t, i) => {
+  // 1. Draw trajectory path
+  ctx.beginPath();
+  ctx.strokeStyle = '#ffff00';
+  ctx.lineWidth = 4;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  trajectory.forEach((t, i) => {
     if (i === 0) ctx.moveTo(t.center.x, t.center.y);
     else ctx.lineTo(t.center.x, t.center.y);
-    });
-    ctx.stroke();
+  });
+  ctx.stroke();
 
-    // Draw trajectory points as small circles
-    // Optimized: Batch circles by color to reduce fill() calls
-
-    // 1. Yellow circles (historical points)
+  // 2. Draw trajectory points (Optimized: Batch by color)
+  if (trajectory.length > 0) {
+    // Yellow circles (historical points)
     if (trajectory.length > 1) {
       ctx.beginPath();
       ctx.fillStyle = '#ffff0080';
-      // Draw all except the last one
       for (let i = 0; i < trajectory.length - 1; i++) {
         const t = trajectory[i];
         ctx.moveTo(t.center.x + 6, t.center.y);
@@ -87,45 +85,32 @@ export const drawTrajectory = (
       ctx.fill();
     }
 
-    // 2. Magenta circle (last point)
-    if (trajectory.length > 0) {
-      const t = trajectory[trajectory.length - 1];
-      ctx.beginPath();
-      ctx.fillStyle = '#ff00ff';
-      ctx.moveTo(t.center.x + 6, t.center.y);
-      ctx.arc(t.center.x, t.center.y, 6, 0, Math.PI * 2);
-      ctx.fill();
-    // Optimized: Batch drawing calls
-    if (trajectory.length > 0) {
-        // Draw historic points (yellow)
-        if (trajectory.length > 1) {
-            ctx.beginPath();
-            ctx.fillStyle = '#ffff0080';
-            for (let i = 0; i < trajectory.length - 1; i++) {
-                const t = trajectory[i];
-                ctx.moveTo(t.center.x + 6, t.center.y);
-                ctx.arc(t.center.x, t.center.y, 6, 0, Math.PI * 2);
-            }
-            ctx.fill();
-        }
+    // Magenta circle (last point)
+    const lastT = trajectory[trajectory.length - 1];
+    ctx.beginPath();
+    ctx.fillStyle = '#ff00ff';
+    ctx.arc(lastT.center.x, lastT.center.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
-        // Draw last point (magenta)
-        const lastT = trajectory[trajectory.length - 1];
-        ctx.beginPath();
-        ctx.fillStyle = '#ff00ff';
-        ctx.arc(lastT.center.x, lastT.center.y, 6, 0, Math.PI * 2);
-        ctx.fill();
+  // 3. Draw current ball position if near current time (or last point if live)
+  let currentPoint: TrajectoryPoint | undefined | null = null;
+  let activeWindowStart = -1;
+  let activeWindowEnd = -1;
+
+  if (isLive) {
+    currentPoint = trajectory[trajectory.length - 1];
+  } else {
+    // Optimized: Use binary search to find points within ±0.3s window
+    activeWindowStart = findFirstIndexGreaterOrEqual(trajectory, currentTime - 0.3);
+    activeWindowEnd = findFirstIndexGreaterOrEqual(trajectory, currentTime + 0.3);
+
+    if (activeWindowStart < activeWindowEnd) {
+      currentPoint = trajectory[activeWindowStart];
     }
+  }
 
-    // Draw current ball position if near current time (or last point if live)
-    let currentPoint: TrajectoryPoint | undefined | null = null;
-    if (isLive) {
-        currentPoint = trajectory[trajectory.length - 1];
-    } else {
-        currentPoint = trajectory.find(p => Math.abs(p.time - currentTime) < 0.3);
-    }
-
-    if (currentPoint) {
+  if (currentPoint) {
     // Draw larger ball position indicator
     ctx.beginPath();
     ctx.fillStyle = '#ff00ff';
@@ -139,31 +124,20 @@ export const drawTrajectory = (
     ctx.arc(currentPoint.center.x, currentPoint.center.y, 18, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Draw prominent bounding box with double-line effect
     const boxWidth = currentPoint.box.x2 - currentPoint.box.x1;
     const boxHeight = currentPoint.box.y2 - currentPoint.box.y1;
 
-    // Outer box (white for contrast)
+    // Outer box
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 4;
-    ctx.strokeRect(
-        currentPoint.box.x1 - 2,
-        currentPoint.box.y1 - 2,
-        boxWidth + 4,
-        boxHeight + 4
-    );
+    ctx.strokeRect(currentPoint.box.x1 - 2, currentPoint.box.y1 - 2, boxWidth + 4, boxHeight + 4);
 
-    // Inner box (magenta)
+    // Inner box
     ctx.strokeStyle = '#ff00ff';
     ctx.lineWidth = 3;
-    ctx.strokeRect(
-        currentPoint.box.x1,
-        currentPoint.box.y1,
-        boxWidth,
-        boxHeight
-    );
+    ctx.strokeRect(currentPoint.box.x1, currentPoint.box.y1, boxWidth, boxHeight);
 
-    // Draw "BALL" label above bounding box
+    // Label
     ctx.font = 'bold 24px Arial';
     ctx.fillStyle = '#ff00ff';
     ctx.strokeStyle = '#000000';
@@ -171,23 +145,40 @@ export const drawTrajectory = (
     const labelText = `BALL ${(currentPoint.confidence * 100).toFixed(0)}%`;
     ctx.strokeText(labelText, currentPoint.box.x1, currentPoint.box.y1 - 10);
     ctx.fillText(labelText, currentPoint.box.x1, currentPoint.box.y1 - 10);
+  }
+
+  // 4. Draw all detection points as small indicators (dimmed if not current)
+  if (!isLive) {
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
+    let hasPoints = false;
+
+    const addPointsInRange = (start: number, end: number) => {
+      for (let i = start; i < end; i++) {
+        const t = trajectory[i];
+        ctx.moveTo(t.center.x + 4, t.center.y);
+        ctx.arc(t.center.x, t.center.y, 4, 0, Math.PI * 2);
+        hasPoints = true;
+      }
+    };
+
+    if (activeWindowStart === -1) {
+      // Fallback if binary search wasn't used or returned no window
+      trajectory.forEach((t) => {
+        if (Math.abs(t.time - currentTime) > 0.3) {
+          ctx.moveTo(t.center.x + 4, t.center.y);
+          ctx.arc(t.center.x, t.center.y, 4, 0, Math.PI * 2);
+          hasPoints = true;
+        }
+      });
+    } else {
+      // Optimized: Draw points outside the active window
+      addPointsInRange(0, activeWindowStart);
+      addPointsInRange(activeWindowEnd, trajectory.length);
     }
 
-    // Draw all detection points as small indicators (dimmed if not current)
-    if (!isLive) {
-        ctx.beginPath();
-        ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
-        let hasPoints = false;
-        trajectory.forEach((t) => {
-            if (Math.abs(t.time - currentTime) > 0.3) {
-                ctx.moveTo(t.center.x + 4, t.center.y);
-                ctx.arc(t.center.x, t.center.y, 4, 0, Math.PI * 2);
-                hasPoints = true;
-            }
-        });
-        if (hasPoints) ctx.fill();
-        if (hasPoints) {
-            ctx.fill();
-        }
+    if (hasPoints) {
+      ctx.fill();
     }
-}
+  }
+};
