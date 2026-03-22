@@ -82,6 +82,8 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const startTimeRef = useRef<number>(0);
+  // Optimization: Reuse canvas context for video frame extraction
+  const frameExtractionCtxRef = useRef<CanvasRenderingContext2D | null>(null);
 
   useEffect(() => {
     courtPointsRef.current = courtPoints;
@@ -326,6 +328,15 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
      const extractWidth = Math.round(video.videoWidth * scaleRatio);
      const extractHeight = Math.round(video.videoHeight * scaleRatio);
 
+     // Lazily initialize reusable context
+     if (!frameExtractionCtxRef.current) {
+        const canvas = document.createElement('canvas');
+        canvas.width = extractWidth;
+        canvas.height = extractHeight;
+        frameExtractionCtxRef.current = canvas.getContext('2d', { willReadFrequently: true });
+     }
+
+     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, frameExtractionCtxRef.current || undefined);
      if (!analysisCanvasRef.current) {
         const canvas = document.createElement('canvas');
         canvas.width = extractWidth;

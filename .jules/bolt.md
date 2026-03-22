@@ -1,3 +1,6 @@
+## 2024-05-23 - Unused Optimization Parameters
+**Learning:** Utility functions often already support optimization (e.g., optional buffer/context arguments) that are ignored by consumer code, leading to unnecessary allocations in hot loops.
+**Action:** Always inspect the signature of utility functions in performance-critical loops to check for existing reuse mechanisms before rewriting them.
 ## 2024-05-22 - Canvas Performance Optimization
 **Learning:** `CanvasRenderingContext2D.fill()` is a rasterization operation and is significantly more expensive than path construction. In loops drawing many shapes (like trajectory points), calling `fill()` for every point (O(N)) causes massive overhead.
 **Action:** Batch shapes of the same style into a single path using `ctx.moveTo()` to separate subpaths (e.g. for circles), then call `fill()` once (O(1)). This reduced fill calls from ~2000 to ~4 for a 1000-point trajectory.
