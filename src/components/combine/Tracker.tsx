@@ -12,20 +12,20 @@ import {
     isPointInCircle,
     isPointInRect,
     doIntersect
-} from './utils/math';
+} from '../../utils/math';
 import {
     MAX_INFERENCE_DIM,
     calculateScalingRatio,
     extractFrameFromVideo
-} from './utils/video';
+} from '../../utils/video';
 import {
     drawZones,
     drawTrajectory,
     Zone,
     ZoneType,
     TrajectoryPoint
-} from './utils/drawing';
-import { fetchInference } from './utils/inference';
+} from '../../utils/drawing';
+import { fetchInference } from '../../utils/inference';
 
 // --- Types ---
 

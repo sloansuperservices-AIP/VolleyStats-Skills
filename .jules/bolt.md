@@ -1,3 +1,22 @@
-## 2025-02-06 - Canvas Batch Rendering & Opacity
-**Learning:** Batching multiple shapes into a single Canvas path (using `moveTo`) and calling `fill()` once is significantly faster (~3.5x JS overhead, ~1000x fewer GPU calls) than filling each shape individually. However, this changes the rendering behavior for overlapping shapes: individual fills stack opacity, whereas a single batched fill renders a flat color (non-zero winding rule) for the union of shapes.
-**Action:** When optimizing Canvas drawing loops, explicitly check if opacity stacking is a required visual feature. If not, always batch calls. If yes, consider if the performance gain outweighs the visual change or if a different blending mode/approach can achieve both.
+# Performance & Architecture Journal
+
+## Merge Overview
+Merged four separate volleyball-related components into a single unified React application:
+1. **Dashboard Hub**: The central navigation system based on the user's mind map.
+2. **DIBS Management**: A full-featured volunteer shift and credit tracking system.
+3. **Combine Performance (PlayerBoard)**: Video-based biomechanics analysis and tracking stations.
+4. **Club Ops (Planner Preview)**: A management dashboard showing tournament readiness and club stats.
+
+## Architecture
+- **AppShell**: A top-level router that manages view state and provides common UI elements (header, nav).
+- **Modular Structure**: Each module lives in `src/components/<module_name>` for easy scaling.
+- **Shared Utilities**: Geometry, video processing, and inference logic consolidated in `src/utils`.
+
+## Performance Optimizations
+- **Code Organization**: Consolidating utilities prevents duplicate logic and reduces the bundle size compared to separate apps.
+- **Vite Build**: Successful production build with efficient chunking.
+- **Responsive Design**: All new components use Tailwind CSS for consistent, responsive layouts.
+
+## Operational Improvements
+- Users can now transition seamlessly between performance analysis (Combine) and club management (DIBS/Planner) without reloading different apps.
+- The Dashboard Hub provides a clear high-level overview of the entire club ecosystem.

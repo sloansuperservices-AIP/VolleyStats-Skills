@@ -10,15 +10,15 @@ import {
   Point,
   getDistance,
   isPointInRect
-} from './utils/math';
+} from '../../utils/math';
 import {
   calculateScalingRatio,
   extractFrameFromVideo
-} from './utils/video';
+} from '../../utils/video';
 import {
   TrajectoryPoint
-} from './utils/drawing';
-import { fetchInference } from './utils/inference';
+} from '../../utils/drawing';
+import { fetchInference } from '../../utils/inference';
 
 // --- Types ---
 
