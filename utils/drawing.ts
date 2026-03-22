@@ -72,6 +72,29 @@ export const drawTrajectory = (
     ctx.stroke();
 
     // Draw trajectory points as small circles
+    // Optimized: Batch circles by color to reduce fill() calls
+
+    // 1. Yellow circles (historical points)
+    if (trajectory.length > 1) {
+      ctx.beginPath();
+      ctx.fillStyle = '#ffff0080';
+      // Draw all except the last one
+      for (let i = 0; i < trajectory.length - 1; i++) {
+        const t = trajectory[i];
+        ctx.moveTo(t.center.x + 6, t.center.y);
+        ctx.arc(t.center.x, t.center.y, 6, 0, Math.PI * 2);
+      }
+      ctx.fill();
+    }
+
+    // 2. Magenta circle (last point)
+    if (trajectory.length > 0) {
+      const t = trajectory[trajectory.length - 1];
+      ctx.beginPath();
+      ctx.fillStyle = '#ff00ff';
+      ctx.moveTo(t.center.x + 6, t.center.y);
+      ctx.arc(t.center.x, t.center.y, 6, 0, Math.PI * 2);
+      ctx.fill();
     // Optimized: Batch drawing calls
     if (trajectory.length > 0) {
         // Draw historic points (yellow)
@@ -162,6 +185,7 @@ export const drawTrajectory = (
                 hasPoints = true;
             }
         });
+        if (hasPoints) ctx.fill();
         if (hasPoints) {
             ctx.fill();
         }
