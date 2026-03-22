@@ -71,6 +71,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
 
   // Model status tracking
   const [modelStatus, setModelStatus] = useState<'idle' | 'loading' | 'active' | 'error'>('idle');
+  const [modelErrorMessage, setModelErrorMessage] = useState<string | null>(null);
   const [lastInferenceTime, setLastInferenceTime] = useState<number | null>(null);
   const [videoDimensions, setVideoDimensions] = useState<{width: number, height: number} | null>(null);
 
@@ -162,6 +163,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     setScore(0);
     setScoreLog([]);
     setModelStatus('idle');
+    setModelErrorMessage(null);
     setLastInferenceTime(null);
     setVideoDimensions(null);
   };
@@ -384,7 +386,6 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
         frameExtractionCtxRef.current = canvas.getContext('2d', { willReadFrequently: true });
      }
 
-     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, frameExtractionCtxRef.current || undefined);
      if (!analysisCanvasRef.current) {
         const canvas = document.createElement('canvas');
         canvas.width = extractWidth;
@@ -397,9 +398,13 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
      if (blob && isLiveAnalysisRunning.current) {
          const result = await fetchInference(blob);
 
-         if (result && result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
+         if (result.error) {
+             setModelStatus('error');
+             setModelErrorMessage(result.error);
+         } else if (result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
              setLastInferenceTime(result.inferenceTime);
              setModelStatus('active');
+             setModelErrorMessage(null);
 
              const ballDetections = result.data.images[0].results.filter((r: any) =>
                 r.name === 'volleyball' ||
@@ -444,7 +449,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                     return newT;
                 });
              }
-         } else if (result === null) {
+         } else if (result.error) {
              setModelStatus('error');
          }
      }
@@ -462,6 +467,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
     setAnalysisProgress(0);
     setTrajectory([]);
     setModelStatus('loading');
+    setModelErrorMessage(null);
 
     const video = videoRef.current;
     const duration = video.duration;
@@ -512,8 +518,12 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
          const task = (async () => {
              if (blob) {
                 const result = await fetchInference(blob);
-                 if (result && result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
+                 if (result.error) {
+                   setModelStatus('error');
+                   setModelErrorMessage(result.error);
+                 } else if (result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
                    setLastInferenceTime(result.inferenceTime);
+                   setModelErrorMessage(null);
                    // Filter for volleyball class - check both name and class ID
                    const ballDetections = result.data.images[0].results.filter((r: any) =>
                      r.name === 'volleyball' ||
@@ -550,7 +560,7 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                        className: bestResult.name || 'ball'
                      });
                    }
-                 } else if (result === null) {
+                 } else if (result.error) {
                       setModelStatus('error');
                  }
              }
@@ -904,10 +914,17 @@ export const Tracker: React.FC<TrackerProps> = ({ onBack }) => {
                     </>
                   )}
                   {modelStatus === 'error' && (
-                    <>
-                      <AlertCircle className="w-4 h-4 text-red-500" />
-                      <span className="text-sm text-red-400">Error</span>
-                    </>
+                    <div className="flex flex-col">
+                      <div className="flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 text-red-500" />
+                        <span className="text-sm text-red-400 font-bold">Error</span>
+                      </div>
+                      {modelErrorMessage && (
+                        <span className="text-[10px] text-red-400 max-w-[150px] leading-tight mt-1 opacity-80 italic">
+                          {modelErrorMessage}
+                        </span>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>

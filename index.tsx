@@ -446,14 +446,6 @@ const StationView = ({
         reader.readAsDataURL(file);
       });
 
-      const model = ai.models.getGenerativeModel({
-        model: 'gemini-2.5-flash',
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: resultSchema,
-        }
-      });
-
       const fullPrompt = `
         You are an expert Volleyball Scout and Biomechanics Analyst.
         Athlete Profile: ${profile.name}, ${profile.heightCm}cm tall, Position: ${profile.position}.
@@ -464,7 +456,13 @@ const StationView = ({
         Be critical but constructive. Use the athlete's height as a reference for spatial measurements.
       `;
 
-      const result = await model.generateContent({
+      // Use a more generic approach if types are failing
+      const result = await (ai.models as any).generateContent({
+        model: 'gemini-2.0-flash',
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: resultSchema,
+        },
         contents: [
           {
             role: 'user',
@@ -476,7 +474,7 @@ const StationView = ({
         ]
       });
 
-      const responseText = result.response.text();
+      const responseText = result.text;
       const analysisData = JSON.parse(responseText) as AnalysisResult;
       onComplete(analysisData);
 
