@@ -1,9 +1,18 @@
-## 2024-05-23 - Unused Optimization Parameters
-**Learning:** Utility functions often already support optimization (e.g., optional buffer/context arguments) that are ignored by consumer code, leading to unnecessary allocations in hot loops.
-**Action:** Always inspect the signature of utility functions in performance-critical loops to check for existing reuse mechanisms before rewriting them.
-## 2024-05-22 - Canvas Performance Optimization
-**Learning:** `CanvasRenderingContext2D.fill()` is a rasterization operation and is significantly more expensive than path construction. In loops drawing many shapes (like trajectory points), calling `fill()` for every point (O(N)) causes massive overhead.
-**Action:** Batch shapes of the same style into a single path using `ctx.moveTo()` to separate subpaths (e.g. for circles), then call `fill()` once (O(1)). This reduced fill calls from ~2000 to ~4 for a 1000-point trajectory.
-## 2025-02-06 - Canvas Batch Rendering & Opacity
-**Learning:** Batching multiple shapes into a single Canvas path (using `moveTo`) and calling `fill()` once is significantly faster (~3.5x JS overhead, ~1000x fewer GPU calls) than filling each shape individually. However, this changes the rendering behavior for overlapping shapes: individual fills stack opacity, whereas a single batched fill renders a flat color (non-zero winding rule) for the union of shapes.
-**Action:** When optimizing Canvas drawing loops, explicitly check if opacity stacking is a required visual feature. If not, always batch calls. If yes, consider if the performance gain outweighs the visual change or if a different blending mode/approach can achieve both.
+# Performance & Code Health Journal
+
+## 🧹 Code Health: Structured Error Handling for Inference API
+
+**Date:** 2026-03-22
+**Issue:** Console warnings and errors in production code for API failures.
+**Action:**
+- Refactored `utils/inference.ts` to return a structured `InferenceResponse` object containing `data`, `inferenceTime`, and `error` message.
+- Replaced `console.warn` and `console.error` with descriptive error messages based on HTTP status codes.
+- Updated `Tracker.tsx` and `ServingTracker.tsx` to handle the new error structure and display user-facing error messages in the UI.
+
+**Impact:**
+- Improved maintainability by centralizing error message logic.
+- Enhanced user experience by providing actionable error feedback (e.g., "Authentication failed. Check your API key.") instead of a generic "Error".
+- Cleaned up production console logs.
+
+**Pre-existing Issue Fixed:**
+- Resolved TypeScript errors in `index.tsx` related to `@google/genai` version mismatch and a syntax error in `utils/drawing.ts`.

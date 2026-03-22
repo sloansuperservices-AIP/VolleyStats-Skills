@@ -65,6 +65,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [modelStatus, setModelStatus] = useState<'idle' | 'loading' | 'active' | 'error'>('idle');
+  const [modelErrorMessage, setModelErrorMessage] = useState<string | null>(null);
   const [lastInferenceTime, setLastInferenceTime] = useState<number | null>(null);
   const [videoDimensions, setVideoDimensions] = useState<{width: number, height: number} | null>(null);
 
@@ -143,6 +144,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
       setTrajectory([]);
       setLandingPoints([]);
       setModelStatus('idle');
+    setModelErrorMessage(null);
       setVideoDimensions(null);
     }
   };
@@ -336,7 +338,6 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
         frameExtractionCtxRef.current = canvas.getContext('2d', { willReadFrequently: true });
      }
 
-     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, frameExtractionCtxRef.current || undefined);
      if (!analysisCanvasRef.current) {
         const canvas = document.createElement('canvas');
         canvas.width = extractWidth;
@@ -349,9 +350,13 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
      if (blob && isLiveAnalysisRunning.current) {
          const result = await fetchInference(blob);
 
-         if (result && result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
+         if (result.error) {
+              setModelStatus('error');
+              setModelErrorMessage(result.error);
+         } else if (result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
               setLastInferenceTime(result.inferenceTime);
               setModelStatus('active');
+              setModelErrorMessage(null);
 
               const ballDetections = result.data.images[0].results.filter((r: any) =>
                 r.name === 'volleyball' ||
@@ -395,7 +400,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
                    return newT;
                 });
               }
-         } else if (result === null) {
+         } else if (result.error) {
              setModelStatus('error');
          }
      }
@@ -414,6 +419,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
     setAnalysisProgress(0);
     setTrajectory([]);
     setModelStatus('loading');
+    setModelErrorMessage(null);
 
     const video = videoRef.current;
     const duration = video.duration;
@@ -461,8 +467,12 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
          const task = (async () => {
              if (blob) {
                 const result = await fetchInference(blob);
-                 if (result && result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
+                 if (result.error) {
+                   setModelStatus('error');
+                   setModelErrorMessage(result.error);
+                 } else if (result.data && result.data.images && result.data.images[0] && result.data.images[0].results) {
                    setLastInferenceTime(result.inferenceTime);
+                   setModelErrorMessage(null);
                    const ballDetections = result.data.images[0].results.filter((r: any) =>
                      r.name === 'volleyball' || r.name === 'sports ball' || r.name === 'ball' || r.class === 0 || r.class === 32
                    );
@@ -486,7 +496,7 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
                        confidence: bestResult.confidence
                      });
                    }
-                 } else if (result === null) {
+                 } else if (result.error) {
                       setModelStatus('error');
                  }
              }
@@ -1006,6 +1016,29 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
             <h3 className="font-bold text-gray-200 mb-3 flex items-center gap-2">
               <Video className="w-4 h-4 text-purple-400" /> Analysis
             </h3>
+
+            {modelStatus === 'error' && (
+               <div className="mb-4 p-3 bg-red-900/20 border border-red-500/50 rounded-lg">
+                  <div className="flex items-center gap-2 mb-1">
+                    <AlertCircle className="w-4 h-4 text-red-500" />
+                    <span className="text-sm text-red-400 font-bold">Inference Error</span>
+                  </div>
+                  {modelErrorMessage && (
+                    <p className="text-xs text-red-400/80 italic leading-tight">
+                      {modelErrorMessage}
+                    </p>
+                  )}
+                  <button
+                    onClick={() => {
+                      setModelStatus('idle');
+                      setModelErrorMessage(null);
+                    }}
+                    className="mt-2 text-[10px] bg-red-500/20 hover:bg-red-500/40 text-red-400 px-2 py-1 rounded transition-colors"
+                  >
+                    Clear Error
+                  </button>
+               </div>
+            )}
 
             {isLive ? (
                 <button

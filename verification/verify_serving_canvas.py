@@ -8,7 +8,7 @@ def verify_serving_canvas():
         page = browser.new_page()
 
         # Navigate to the app (assuming running on port 5173 based on Vite defaults)
-        page.goto("http://localhost:3001")
+        page.goto("http://localhost:3000")
 
         # Fill out Athlete Profile if present
         if page.is_visible("text=Athlete Profile"):
