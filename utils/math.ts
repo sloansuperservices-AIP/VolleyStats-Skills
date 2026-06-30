@@ -42,3 +42,24 @@ export const doIntersect = (p1: Point, q1: Point, p2: Point, q2: Point) => {
 
   return false;
 };
+
+/**
+ * Binary search to find the first index where item.time >= targetTime
+ * Assumes the array is sorted by time.
+ */
+export const findFirstIndexGreaterOrEqual = <T extends { time: number }>(
+  arr: T[],
+  targetTime: number
+): number => {
+  let low = 0;
+  let high = arr.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (arr[mid].time < targetTime) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
+};

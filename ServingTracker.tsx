@@ -337,14 +337,6 @@ export const ServingTracker: React.FC<ServingTrackerProps> = ({ onBack }) => {
      }
 
      const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, frameExtractionCtxRef.current || undefined);
-     if (!analysisCanvasRef.current) {
-        const canvas = document.createElement('canvas');
-        canvas.width = extractWidth;
-        canvas.height = extractHeight;
-        analysisCanvasRef.current = canvas.getContext('2d', { willReadFrequently: true });
-     }
-
-     const blob = await extractFrameFromVideo(video, extractWidth, extractHeight, analysisCanvasRef.current || undefined);
 
      if (blob && isLiveAnalysisRunning.current) {
          const result = await fetchInference(blob);
