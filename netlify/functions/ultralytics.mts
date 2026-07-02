@@ -10,8 +10,19 @@ export default async (req: Request, context: Context) => {
   }
 
   try {
-    // Get API key from environment variable or use fallback
-    const apiKey = Netlify.env.get("VITE_ULTRALYTICS_API_KEY") || "5ea02b4238fc9528408b8c36dcdb3834e11a9cbf58";
+    // Get API key from environment variable
+    const apiKey = Netlify.env.get("VITE_ULTRALYTICS_API_KEY");
+
+    if (!apiKey) {
+      console.error("VITE_ULTRALYTICS_API_KEY is not set");
+      return new Response(
+        JSON.stringify({ error: "Server configuration error: API key missing" }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
 
     // Forward the request body as-is (multipart/form-data)
     const formData = await req.formData();

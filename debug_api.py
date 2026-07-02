@@ -23,7 +23,12 @@ def test_api():
 
     # 2. Call API
     url = "https://predict.ultralytics.com"
-    headers = {"x-api-key": "5ea02b4238fc9528408b8c36dcdb3834e11a9cbf58"}
+    api_key = os.environ.get("VITE_ULTRALYTICS_API_KEY")
+    if not api_key:
+        print("Error: VITE_ULTRALYTICS_API_KEY environment variable not set.")
+        return
+
+    headers = {"x-api-key": api_key}
     data = {"model": "https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq", "imgsz": 640, "conf": 0.25, "iou": 0.45}
 
     print("Sending request to API...")

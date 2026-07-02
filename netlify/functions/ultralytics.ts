@@ -10,8 +10,19 @@ export default async (request: Request, context: Context) => {
   }
 
   try {
-    // Get the API key from environment variable or use the default
-    const apiKey = process.env.VITE_ULTRALYTICS_API_KEY || "5ea02b4238fc9528408b8c36dcdb3834e11a9cbf58";
+    // Get the API key from environment variable
+    const apiKey = process.env.VITE_ULTRALYTICS_API_KEY;
+
+    if (!apiKey) {
+      console.error("VITE_ULTRALYTICS_API_KEY is not set");
+      return new Response(
+        JSON.stringify({ error: "Server configuration error: API key missing" }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
 
     // Get the form data from the incoming request
     const formData = await request.formData();
